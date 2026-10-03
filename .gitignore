@@ -1,0 +1,42 @@
+node_modules/
+.env
+.env.local
+backend/.env
+frontend/.env
+backend/data/*.sqlite
+backend/data/*.sqlite-journal
+coverage/
+dist/
+
+### IntelliJ IDEA ###
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+.kotlin
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/nbdist/
+/.nb-gradle/
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+# Project exclude paths
+/frontend/vite.config.d.ts
+/frontend/vite.config.js
