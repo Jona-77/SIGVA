@@ -211,7 +211,5 @@ export async function startServer() {
     throw new Error('JWT_SECRET es obligatorio.');
   }
   await syncDatabase();
-  app.listen(config.port, () => {
-    // Intentionally left blank for startup logs.
-  });
+  app.listen(config.port);
 }
