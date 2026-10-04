@@ -3,10 +3,12 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { Op } from 'sequelize';
-import { Airport, Flight, Role, User, ensureExampleFlightDepartures, sequelize, seedDatabase } from './db/index.js';
+import { randomUUID } from 'node:crypto';
+import { Airport, Flight, Role, Session, User, ensureExampleFlightDepartures, ensureStateConstraints, sequelize, seedDatabase } from './db/index.js';
 import { config } from './config.js';
 import { requireAuth, requireRole } from './auth.js';
 import { flightsRouter } from './flights.js';
+import { asyncHandler } from './asyncHandler.js';
 
 export { requireAuth, requireRole } from './auth.js';
 
@@ -18,6 +20,7 @@ app.use(express.json());
 export async function syncDatabase() {
   await sequelize.authenticate();
   await sequelize.sync();
+  await ensureStateConstraints();
   const count = await Role.count();
   if (count === 0) {
     await seedDatabase();
@@ -34,7 +37,7 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, message: 'SIGVA backend activo' });
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', asyncHandler(async (req, res) => {
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
 
@@ -57,7 +60,9 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   const roleName = user.role?.name ?? 'passenger';
-  const token = jwt.sign({ userId: user.id, email: user.email, role: roleName }, config.jwtSecret, { expiresIn: '30m' });
+  const sessionId = randomUUID();
+  await Session.create({ id: sessionId, userId: user.id, lastActivity: new Date(), revoked: false });
+  const token = jwt.sign({ userId: user.id, email: user.email, role: roleName, sessionId }, config.jwtSecret);
 
   return res.json({
     token,
@@ -68,9 +73,9 @@ app.post('/api/auth/login', async (req, res) => {
       role: roleName
     }
   });
-});
+}));
 
-app.get('/api/auth/me', requireAuth, async (req, res) => {
+app.get('/api/auth/me', requireAuth, asyncHandler(async (req, res) => {
   const user = await loadUserById(req.user!.id);
   if (!user) {
     return res.status(401).json({ message: 'Sesión no válida o expirada.' });
@@ -84,13 +89,14 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
       role: user.role?.name ?? 'passenger'
     }
   });
-});
+}));
 
-app.post('/api/auth/logout', requireAuth, (_req, res) => {
+app.post('/api/auth/logout', requireAuth, asyncHandler(async (req, res) => {
+  await Session.update({ revoked: true }, { where: { id: req.user!.sessionId } });
   res.json({ ok: true, message: 'Sesión cerrada correctamente.' });
-});
+}));
 
-app.get('/api/airports', requireAuth, requireRole('admin'), async (req, res) => {
+app.get('/api/airports', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
   const activeParam = req.query.active;
   const where = activeParam === undefined ? {} : { isActive: activeParam === 'true' };
 
@@ -100,9 +106,9 @@ app.get('/api/airports', requireAuth, requireRole('admin'), async (req, res) => 
   });
 
   return res.json({ airports });
-});
+}));
 
-app.post('/api/airports', requireAuth, requireRole('admin'), async (req, res) => {
+app.post('/api/airports', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
   const { iata, name, city, province } = req.body ?? {};
 
   if (!iata || !name || !city || !province) {
@@ -128,9 +134,9 @@ app.post('/api/airports', requireAuth, requireRole('admin'), async (req, res) =>
   });
 
   return res.status(201).json({ airport });
-});
+}));
 
-app.put('/api/airports/:id', requireAuth, requireRole('admin'), async (req, res) => {
+app.put('/api/airports/:id', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
   const airport = await Airport.findByPk(Number(req.params.id));
   if (!airport) {
     return res.status(404).json({ message: 'Aeropuerto no encontrado.' });
@@ -154,16 +160,24 @@ app.put('/api/airports/:id', requireAuth, requireRole('admin'), async (req, res)
     return res.status(409).json({ message: 'Ya existe otro aeropuerto con ese código IATA.' });
   }
 
+  const fieldErrors: Record<string, string> = {};
+  if (typeof name !== 'string' || !name.trim()) fieldErrors.name = 'El nombre es obligatorio.';
+  if (typeof city !== 'string' || !city.trim()) fieldErrors.city = 'La ciudad es obligatoria.';
+  if (typeof province !== 'string' || !province.trim()) fieldErrors.province = 'La provincia es obligatoria.';
+  if (Object.keys(fieldErrors).length > 0) {
+    return res.status(400).json({ message: 'Nombre, ciudad y provincia son obligatorios.', errors: fieldErrors });
+  }
+
   airport.iata = normalizedIata;
-  airport.name = String(name ?? airport.name).trim();
-  airport.city = String(city ?? airport.city).trim();
-  airport.province = String(province ?? airport.province).trim();
+  airport.name = name.trim();
+  airport.city = city.trim();
+  airport.province = province.trim();
   await airport.save();
 
   return res.json({ airport });
-});
+}));
 
-app.delete('/api/airports/:id', requireAuth, requireRole('admin'), async (req, res) => {
+app.delete('/api/airports/:id', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
   const airport = await Airport.findByPk(Number(req.params.id));
   if (!airport) {
     return res.status(404).json({ message: 'Aeropuerto no encontrado.' });
@@ -184,13 +198,18 @@ app.delete('/api/airports/:id', requireAuth, requireRole('admin'), async (req, r
   await airport.save();
 
   return res.json({ airport, message: 'Aeropuerto desactivado correctamente.' });
-});
+}));
 
 app.use('/api/flights', flightsRouter);
+app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('Error inesperado en la API:', error);
+  return res.status(500).json({ message: 'Error interno del servidor.' });
+});
 
 export async function startServer() {
+  if (!config.jwtSecret) {
+    throw new Error('JWT_SECRET es obligatorio.');
+  }
   await syncDatabase();
-  app.listen(config.port, () => {
-    // Intentionally left blank for startup logs.
-  });
+  app.listen(config.port);
 }

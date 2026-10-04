@@ -1,7 +1,8 @@
 import { Router, type Request, type Response } from 'express';
 import type { Order } from 'sequelize';
-import { Airport, Departure, Flight, type FlightModel } from './db/index.js';
+import { Airport, Cancellation, Class, Departure, Fare, Flight, FlightChangeHistory, sequelize, User, type FlightModel } from './db/index.js';
 import { requireAuth, requireRole } from './auth.js';
+import { asyncHandler } from './asyncHandler.js';
 
 const pageSize = 20;
 const weekdays = new Set([1, 2, 3, 4, 5, 6, 7]);
@@ -52,7 +53,7 @@ function isDateOnly(value: unknown): value is string {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
-function getFieldErrors(body: Record<string, unknown>) {
+function getFieldErrors(body: Record<string, unknown>, validateAvailableFrom = true) {
   const errors: Record<string, string> = {};
   const required = [
     'flightNumber',
@@ -129,7 +130,7 @@ function getFieldErrors(body: Record<string, unknown>) {
   if (Number(body.originAirportId) === Number(body.destinationAirportId)) {
     errors.destinationAirportId = 'El origen y el destino deben ser distintos.';
   }
-  if (String(body.availableFrom) < todayProvider()) {
+  if (validateAvailableFrom && String(body.availableFrom) < todayProvider()) {
     errors.availableFrom = 'La fecha desde no puede ser anterior al día actual.';
   }
   if (String(body.availableTo) < String(body.availableFrom)) {
@@ -159,12 +160,12 @@ function enumerateDepartureDates(from: string, to: string, days: number[]) {
 function sortOrder(sortBy: unknown, direction: unknown): Order {
   const order = direction === 'desc' ? 'DESC' : 'ASC';
   if (sortBy === 'route') {
-    return [[{ model: Airport, as: 'origin' }, 'iata', order], [{ model: Airport, as: 'destination' }, 'iata', order]];
+    return [[{ model: Airport, as: 'origin' }, 'iata', order], [{ model: Airport, as: 'destination' }, 'iata', order], ['id', order]];
   }
   if (sortBy === 'departure') {
-    return [['departureTime', order]];
+    return [['departureTime', order], ['id', order]];
   }
-  return [['flightNumber', order]];
+  return [['flightNumber', order], ['id', order]];
 }
 
 function isPositiveInteger(value: unknown): value is string {
@@ -178,19 +179,16 @@ function normalizeFlightDays(days: unknown) {
   return [...new Set(days.map((day) => Number(day)).filter((day) => Number.isInteger(day) && weekdays.has(day)))].sort((a, b) => a - b);
 }
 
-function buildHistoryEntry(user: { id: number; email: string }, field: string, previousValue: unknown, newValue: unknown) {
-  return {
-    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    changedAt: new Date().toISOString(),
-    userId: user.id,
-    userEmail: user.email,
-    field,
-    previousValue,
-    newValue
-  };
+function parseHistoryValue(value: string | null) {
+  if (value === null) return null;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
 }
 
-function serializeFlight(flight: FlightModel) {
+function serializeFlight(flight: FlightModel, history: Array<Record<string, unknown>> = []) {
   const departures = (flight.departures ?? []).map((departure) => ({
     id: departure.id,
     date: departure.date,
@@ -206,7 +204,7 @@ function serializeFlight(flight: FlightModel) {
     ...flight.toJSON(),
     arrivalsNextDay: flight.arrivalTime <= flight.departureTime,
     departures,
-    history: Array.isArray(flight.history) ? flight.history : []
+    history
   };
 }
 
@@ -223,7 +221,24 @@ async function loadFlightDetail(flightId: number) {
     return null;
   }
 
-  return serializeFlight(flight);
+  const changes = await FlightChangeHistory.findAll({
+    where: { flightId },
+    order: [['changedAt', 'ASC'], ['id', 'ASC']]
+  });
+  const users = await User.findAll({
+    where: { id: [...new Set(changes.map((change) => Number(change.get('userId'))))] }
+  });
+  const usersById = new Map(users.map((user) => [user.id, user.email]));
+  const history = changes.map((change) => ({
+    id: change.id,
+    changedAt: change.changedAt,
+    userId: change.userId,
+    userEmail: usersById.get(Number(change.userId)) ?? '',
+    field: change.field,
+    previousValue: parseHistoryValue(change.previousValue ?? null),
+    newValue: parseHistoryValue(change.newValue ?? null)
+  }));
+  return serializeFlight(flight, history);
 }
 
 async function updateFlightHandler(req: Request, res: Response) {
@@ -236,6 +251,13 @@ async function updateFlightHandler(req: Request, res: Response) {
   }
 
   const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+  if (body.confirmed !== true) {
+    return res.status(409).json({
+      message: 'Confirme la modificación del vuelo.',
+      requiresConfirmation: true,
+      conflicts: []
+    });
+  }
   const values = {
     departureTime: body.departureTime ?? flight.departureTime,
     arrivalTime: body.arrivalTime ?? flight.arrivalTime,
@@ -253,8 +275,8 @@ async function updateFlightHandler(req: Request, res: Response) {
   const errors = getFieldErrors({
     ...values,
     flightNumber: flight.flightNumber,
-    daysOfWeek: Array.isArray(values.daysOfWeek) ? values.daysOfWeek : [values.daysOfWeek]
-  });
+    daysOfWeek: values.daysOfWeek
+  }, String(values.availableFrom) !== flight.availableFrom);
   if (Object.keys(errors).length > 0) {
     return res.status(400).json({ message: 'Revise los campos indicados.', errors });
   }
@@ -272,25 +294,31 @@ async function updateFlightHandler(req: Request, res: Response) {
   const allFutureDepartures = (await Departure.findAll({ where: { flightId: flight.id } }))
     .filter((departure) => !hasDepartureTimePassed(departure.date, flight.departureTime) && departure.status !== 'CANCELLED');
 
-  const conflicts: Array<Record<string, unknown>> = [];
+  const capacityConflicts: Array<Record<string, unknown>> = [];
+  const scheduleConflicts: Array<Record<string, unknown>> = [];
   for (const departure of allFutureDepartures) {
     if (values.economySeats < departure.soldEconomy) {
-      conflicts.push({ departureDate: departure.date, field: 'economySeats', soldEconomy: departure.soldEconomy, requestedSeats: values.economySeats });
+      capacityConflicts.push({ departureDate: departure.date, field: 'economySeats', soldEconomy: departure.soldEconomy, requestedSeats: values.economySeats });
     }
     if (values.firstClassSeats < departure.soldFirstClass) {
-      conflicts.push({ departureDate: departure.date, field: 'firstClassSeats', soldFirstClass: departure.soldFirstClass, requestedSeats: values.firstClassSeats });
+      capacityConflicts.push({ departureDate: departure.date, field: 'firstClassSeats', soldFirstClass: departure.soldFirstClass, requestedSeats: values.firstClassSeats });
     }
     if (!newDates.includes(departure.date) && (departure.soldEconomy > 0 || departure.soldFirstClass > 0)) {
-      conflicts.push({ departureDate: departure.date, field: 'schedule', reason: 'La salida deja de corresponder al vuelo y tiene pasajes vendidos.' });
+      scheduleConflicts.push({ departureDate: departure.date, field: 'schedule', reason: 'La salida deja de corresponder al vuelo y tiene pasajes vendidos.' });
     }
   }
 
-  const confirmed = req.body?.confirmed === true || req.body?.confirm === true;
-  if (conflicts.length > 0 && !confirmed) {
+  if (capacityConflicts.length > 0) {
+    return res.status(400).json({
+      message: 'La capacidad no puede ser menor que los pasajes vendidos.',
+      conflicts: capacityConflicts
+    });
+  }
+  if (scheduleConflicts.length > 0 && body.confirmedConflicts !== true) {
     return res.status(409).json({
       message: 'Existen salidas futuras con pasajes vendidos que requieren confirmación.',
       requiresConfirmation: true,
-      conflicts
+      conflicts: scheduleConflicts
     });
   }
 
@@ -301,71 +329,91 @@ async function updateFlightHandler(req: Request, res: Response) {
     destinationAirportId: flight.destinationAirportId,
     availableFrom: flight.availableFrom,
     availableTo: flight.availableTo,
-    daysOfWeek: flight.daysOfWeek,
+    daysOfWeek: normalizeFlightDays(flight.daysOfWeek.split(',')).join(','),
     economySeats: flight.economySeats,
     firstClassSeats: flight.firstClassSeats,
     economyPrice: flight.economyPrice,
     firstClassPrice: flight.firstClassPrice
   };
 
-  const newHistory: Array<Record<string, unknown>> = Array.isArray(flight.history) ? [...flight.history] as Array<Record<string, unknown>> : [];
-  for (const [field, value] of Object.entries(values)) {
-    const previousValue = previousValues[field as keyof typeof previousValues];
-    if (String(previousValue) !== String(value)) {
-      newHistory.push(buildHistoryEntry(req.user!, field, previousValue, value));
-    }
-  }
-
-  await flight.update({
-    departureTime: String(values.departureTime),
-    arrivalTime: String(values.arrivalTime),
-    originAirportId: Number(values.originAirportId),
-    destinationAirportId: Number(values.destinationAirportId),
-    availableFrom: String(values.availableFrom),
-    availableTo: String(values.availableTo),
-    daysOfWeek: normalizedDays.join(','),
-    economySeats: Number(values.economySeats),
-    firstClassSeats: Number(values.firstClassSeats),
-    economyPrice: Number(values.economyPrice),
-    firstClassPrice: Number(values.firstClassPrice),
-    history: newHistory
-  });
-
-  const currentDates = new Set((await Departure.findAll({ where: { flightId: flight.id } })).map((departure) => departure.date));
+  const newValues = {
+    ...values,
+    daysOfWeek: normalizedDays.join(',')
+  };
+  const updatedFields = Object.keys(previousValues).filter((key) =>
+    String((previousValues as Record<string, unknown>)[key]) !== String((newValues as Record<string, unknown>)[key])
+  );
   const newSet = new Set(newDates);
-  const removedDates = Array.from(currentDates).filter((date) => !newSet.has(date));
   const futureDates = Array.from(newSet).filter((date) => !hasDepartureTimePassed(date, String(values.departureTime)));
-  for (const date of removedDates) {
-    const departure = await Departure.findOne({ where: { flightId: flight.id, date } });
-    if (!departure) {
-      continue;
+  await sequelize.transaction(async (transaction) => {
+    const changedAt = new Date();
+    for (const field of updatedFields) {
+      const previousValue = (previousValues as Record<string, unknown>)[field];
+      const newValue = (newValues as Record<string, unknown>)[field];
+      await FlightChangeHistory.create({
+        flightId: flight.id,
+        changedAt,
+        userId: req.user!.id,
+        field,
+        previousValue: JSON.stringify(previousValue),
+        newValue: JSON.stringify(newValue)
+      }, { transaction });
     }
-    if (hasDepartureTimePassed(departure.date, flight.departureTime)) {
-      continue;
+
+    await flight.update({
+      departureTime: String(values.departureTime),
+      arrivalTime: String(values.arrivalTime),
+      originAirportId: Number(values.originAirportId),
+      destinationAirportId: Number(values.destinationAirportId),
+      availableFrom: String(values.availableFrom),
+      availableTo: String(values.availableTo),
+      daysOfWeek: normalizedDays.join(','),
+      economySeats: Number(values.economySeats),
+      firstClassSeats: Number(values.firstClassSeats),
+      economyPrice: Number(values.economyPrice),
+      firstClassPrice: Number(values.firstClassPrice)
+    }, { transaction });
+
+    const fareClasses = await Class.findAll({ transaction });
+    for (const fareClass of fareClasses) {
+      const isEconomy = fareClass.get('code') === 'ECONOMY';
+      await Fare.upsert({
+        flightId: flight.id,
+        classId: fareClass.id,
+        price: isEconomy ? Number(values.economyPrice) : Number(values.firstClassPrice),
+        capacity: isEconomy ? Number(values.economySeats) : Number(values.firstClassSeats)
+      }, { transaction });
     }
-    const soldCount = departure.soldEconomy + departure.soldFirstClass;
-    if (soldCount > 0) {
-      departure.status = 'CANCELLED';
-      departure.cancelledAt = new Date().toISOString();
-      departure.cancelledByUserId = req.user!.id;
-      await departure.save();
-    } else {
-      await departure.destroy();
+
+    const existingDepartures = await Departure.findAll({ where: { flightId: flight.id }, transaction });
+    for (const departure of existingDepartures) {
+      if (newSet.has(departure.date) || hasDepartureTimePassed(departure.date, flight.departureTime)) continue;
+      const soldCount = departure.soldEconomy + departure.soldFirstClass;
+      if (soldCount > 0) {
+        departure.status = 'CANCELLED';
+        departure.cancelledAt = changedAt.toISOString();
+        departure.cancelledByUserId = req.user!.id;
+        await departure.save({ transaction });
+        await Cancellation.create({ departureId: departure.id, cancelledAt: changedAt, userId: req.user!.id }, { transaction });
+      } else {
+        await departure.destroy({ transaction });
+      }
     }
-  }
-  for (const date of futureDates) {
-    const exists = await Departure.findOne({ where: { flightId: flight.id, date } });
-    if (!exists) {
-      await Departure.create({ flightId: flight.id, date, status: 'SCHEDULED' });
+
+    for (const date of futureDates) {
+      const exists = existingDepartures.some((departure) => departure.date === date);
+      if (!exists) {
+        await Departure.create({ flightId: flight.id, date, status: 'SCHEDULED' }, { transaction });
+      }
     }
-  }
+  });
 
   const detail = await loadFlightDetail(flight.id);
   return res.json({
     message: 'Vuelo actualizado correctamente.',
     requiresConfirmation: false,
     flight: detail,
-    updatedFields: Object.keys(previousValues).filter((key) => String((previousValues as Record<string, unknown>)[key]) !== String((values as Record<string, unknown>)[key]))
+    updatedFields
   });
 }
 
@@ -374,14 +422,20 @@ async function cancelFlightHandler(req: Request, res: Response) {
   if (!flight) {
     return res.status(404).json({ message: 'Vuelo no encontrado.' });
   }
+  if (flight.status !== 'ACTIVE') {
+    return res.status(400).json({ message: 'El vuelo ya está cancelado.' });
+  }
 
   const departureDate = typeof req.body?.departureDate === 'string' ? req.body.departureDate : undefined;
-  const confirmed = req.body?.confirmed === true || req.body?.confirm === true;
+  const confirmed = req.body?.confirmed === true;
 
   if (departureDate) {
     const departure = await Departure.findOne({ where: { flightId: flight.id, date: departureDate } });
     if (!departure) {
       return res.status(404).json({ message: 'Salida no encontrada.' });
+    }
+    if (departure.status === 'CANCELLED') {
+      return res.status(400).json({ message: 'La salida ya está cancelada.' });
     }
     if (hasDepartureTimePassed(departure.date, flight.departureTime)) {
       return res.status(400).json({ message: 'No es posible cancelar salidas cuya fecha ya pasó.' });
@@ -395,12 +449,18 @@ async function cancelFlightHandler(req: Request, res: Response) {
         departureDate: departure.date
       });
     }
-    departure.status = 'CANCELLED';
-    departure.cancelledAt = new Date().toISOString();
-    departure.cancelledByUserId = req.user!.id;
-    await departure.save();
-    flight.history = Array.isArray(flight.history) ? [...flight.history, buildHistoryEntry(req.user!, 'departureCancelled', { date: departure.date, soldCount: affected }, { date: departure.date, status: 'CANCELLED' })] : [buildHistoryEntry(req.user!, 'departureCancelled', { date: departure.date, soldCount: affected }, { date: departure.date, status: 'CANCELLED' })];
-    await flight.save();
+    await sequelize.transaction(async (transaction) => {
+      const cancelledAt = new Date();
+      departure.status = 'CANCELLED';
+      departure.cancelledAt = cancelledAt.toISOString();
+      departure.cancelledByUserId = req.user!.id;
+      await departure.save({ transaction });
+      await Cancellation.create({
+        departureId: departure.id,
+        cancelledAt,
+        userId: req.user!.id
+      }, { transaction });
+    });
     return res.json({
       message: 'Salida cancelada correctamente.',
       flight: await loadFlightDetail(flight.id),
@@ -420,18 +480,20 @@ async function cancelFlightHandler(req: Request, res: Response) {
     });
   }
 
-  const now = new Date().toISOString();
-  for (const departure of futureDepartures) {
-    departure.status = 'CANCELLED';
-    departure.cancelledAt = now;
-    departure.cancelledByUserId = req.user!.id;
-    await departure.save();
-  }
-  flight.status = 'CANCELLED';
-  flight.cancelledAt = now;
-  flight.cancelledByUserId = req.user!.id;
-  flight.history = Array.isArray(flight.history) ? [...flight.history, buildHistoryEntry(req.user!, 'status', 'ACTIVE', 'CANCELLED')] : [buildHistoryEntry(req.user!, 'status', 'ACTIVE', 'CANCELLED')];
-  await flight.save();
+  await sequelize.transaction(async (transaction) => {
+    const cancelledAt = new Date();
+    for (const departure of futureDepartures) {
+      departure.status = 'CANCELLED';
+      departure.cancelledAt = cancelledAt.toISOString();
+      departure.cancelledByUserId = req.user!.id;
+      await departure.save({ transaction });
+    }
+    flight.status = 'CANCELLED';
+    flight.cancelledAt = cancelledAt.toISOString();
+    flight.cancelledByUserId = req.user!.id;
+    await flight.save({ transaction });
+    await Cancellation.create({ flightId: flight.id, cancelledAt, userId: req.user!.id }, { transaction });
+  });
   return res.json({
     message: 'Vuelo cancelado correctamente.',
     flight: await loadFlightDetail(flight.id),
@@ -442,7 +504,7 @@ async function cancelFlightHandler(req: Request, res: Response) {
 export const flightsRouter = Router();
 flightsRouter.use(requireAuth, requireRole('admin'));
 
-flightsRouter.post('/', async (req: Request, res: Response) => {
+flightsRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
   const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
   const errors = getFieldErrors(body);
   if (Object.keys(errors).length > 0) {
@@ -490,9 +552,15 @@ flightsRouter.post('/', async (req: Request, res: Response) => {
       firstClassSeats: Number(body.firstClassSeats),
       economyPrice: Number(body.economyPrice),
       firstClassPrice: Number(body.firstClassPrice),
-      status: 'ACTIVE',
-      history: []
+      status: 'ACTIVE'
     }, { transaction });
+    const classes = await Class.findAll({ transaction });
+    await Fare.bulkCreate(classes.map((fareClass) => ({
+      flightId: created.id,
+      classId: fareClass.id,
+      price: fareClass.get('code') === 'ECONOMY' ? Number(body.economyPrice) : Number(body.firstClassPrice),
+      capacity: fareClass.get('code') === 'ECONOMY' ? Number(body.economySeats) : Number(body.firstClassSeats)
+    })), { transaction });
     if (dates.length > 0) {
       await Departure.bulkCreate(dates.map((date) => ({ flightId: created.id, date })), { transaction });
     }
@@ -505,9 +573,9 @@ flightsRouter.post('/', async (req: Request, res: Response) => {
     arrivalsNextDay: String(body.arrivalTime) <= String(body.departureTime),
     departuresGenerated: dates.length
   });
-});
+}));
 
-flightsRouter.get('/', async (req: Request, res: Response) => {
+flightsRouter.get('/', asyncHandler(async (req: Request, res: Response) => {
   const page = isPositiveInteger(req.query.page) ? Number(req.query.page) : 1;
   const where: Record<string, unknown> = {};
   if (req.query.status === 'ACTIVE' || req.query.status === 'CANCELLED') {
@@ -543,14 +611,14 @@ flightsRouter.get('/', async (req: Request, res: Response) => {
       totalPages: Math.ceil(count / pageSize)
     }
   });
-});
+}));
 
-flightsRouter.put('/:id', updateFlightHandler);
-flightsRouter.patch('/:id', updateFlightHandler);
-flightsRouter.post('/:id/cancel', cancelFlightHandler);
-flightsRouter.delete('/:id', cancelFlightHandler);
+flightsRouter.put('/:id', asyncHandler(updateFlightHandler));
+flightsRouter.patch('/:id', asyncHandler(updateFlightHandler));
+flightsRouter.post('/:id/cancel', asyncHandler(cancelFlightHandler));
+flightsRouter.delete('/:id', asyncHandler(cancelFlightHandler));
 
-flightsRouter.get('/:id', async (req: Request, res: Response) => {
+flightsRouter.get('/:id', asyncHandler(async (req: Request, res: Response) => {
   if (!isPositiveInteger(req.params.id)) {
     return res.status(404).json({ message: 'Vuelo no encontrado.' });
   }
@@ -565,5 +633,5 @@ flightsRouter.get('/:id', async (req: Request, res: Response) => {
     return res.status(404).json({ message: 'Vuelo no encontrado.' });
   }
 
-  return res.json({ flight: serializeFlight(flight) });
-});
+  return res.json({ flight: await loadFlightDetail(flight.id) });
+}));

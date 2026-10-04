@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: sigva-api
+    runtime: node
+    plan: free
+    buildCommand: npm install --include=dev --prefix backend --silent && npm --prefix backend run build
+    startCommand: npm --prefix backend start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        sync: false
+      - key: SESSION_TIMEOUT_MINUTES
+        value: "30"
+      - key: CLIENT_URL
+        value: https://sigva-demo.onrender.com
+      - key: DB_PATH
+        value: /tmp/sigva.sqlite
+  - type: web
+    name: sigva-demo
+    runtime: static
+    buildCommand: npm install --prefix frontend --silent && npm --prefix frontend run build
+    staticPublishPath: frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        value: https://sigva-api.onrender.com

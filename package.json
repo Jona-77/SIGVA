@@ -3,7 +3,6 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "ci": "npm install --prefix backend --silent && npm install --prefix frontend --silent && npm --prefix backend run test && npm --prefix frontend run build",
     "db:reset": "npm --prefix backend run db:reset",
     "backend:dev": "npm --prefix backend run dev",
     "frontend:dev": "npm --prefix frontend run dev"

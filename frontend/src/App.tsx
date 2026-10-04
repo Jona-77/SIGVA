@@ -14,7 +14,7 @@ type AuthResponse = {
   user: User;
 };
 
-const API_URL = 'http://localhost:3001';
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
 
 async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem('sigva-token');
