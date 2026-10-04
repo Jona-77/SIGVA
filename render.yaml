@@ -3,7 +3,7 @@ services:
     name: sigva-api
     runtime: node
     plan: free
-    buildCommand: npm install --prefix backend --silent && npm --prefix backend run build
+    buildCommand: npm install --include=dev --prefix backend --silent && npm --prefix backend run build
     startCommand: npm --prefix backend start
     envVars:
       - key: NODE_ENV
