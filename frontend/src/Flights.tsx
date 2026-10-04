@@ -404,7 +404,7 @@ function FlightEdit({ flight, onUpdated, onCancel }: {
     return errors[field] ? <span className="field-error" role="alert">{errors[field]}</span> : null;
   }
 
-  async function save(confirmed: boolean) {
+  async function save(confirmed: boolean, confirmedConflicts = false) {
     return flightsRequest<{ flight: FlightDetail }>('/api/flights/' + flight.id, {
       method: 'PUT',
       body: JSON.stringify({
@@ -416,7 +416,8 @@ function FlightEdit({ flight, onUpdated, onCancel }: {
         firstClassSeats: Number(form.firstClassSeats),
         economyPrice: Number(form.economyPrice),
         firstClassPrice: Number(form.firstClassPrice),
-        confirmed
+        confirmed,
+        confirmedConflicts
       })
     });
   }
@@ -429,7 +430,7 @@ function FlightEdit({ flight, onUpdated, onCancel }: {
     if (!approved) return;
 
     try {
-      const response = await save(false);
+      const response = await save(true);
       onUpdated(response.flight);
     } catch (reason) {
       const error = reason as ApiError;
@@ -440,7 +441,7 @@ function FlightEdit({ flight, onUpdated, onCancel }: {
         const confirmConflicts = window.confirm(`${error.message}${detail}\nSi confirma, las salidas afectadas con pasajes vendidos serán canceladas. ¿Desea continuar?`);
         if (!confirmConflicts) return;
         try {
-          const response = await save(true);
+          const response = await save(true, true);
           onUpdated(response.flight);
         } catch (retryReason) {
           const retryError = retryReason as ApiError;

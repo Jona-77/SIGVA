@@ -7,6 +7,10 @@ backend/data/*.sqlite
 backend/data/*.sqlite-journal
 coverage/
 dist/
+*.tsbuildinfo
+*.iml
+vite.config.js
+vite.config.d.ts
 
 ### IntelliJ IDEA ###
 out/
@@ -37,6 +41,3 @@ bin/
 
 ### Mac OS ###
 .DS_Store
-# Project exclude paths
-/frontend/vite.config.d.ts
-/frontend/vite.config.js

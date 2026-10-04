@@ -1,7 +1,8 @@
 import request from 'supertest';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../app.js';
-import { Airport, Flight, resetDatabase } from '../db/index.js';
+import { Airport, Flight, Session, User, resetDatabase } from '../db/index.js';
+import { config } from '../config.js';
 
 async function getToken(email: string, password: string) {
   const response = await request(app).post('/api/auth/login').send({ email, password });
@@ -10,7 +11,25 @@ async function getToken(email: string, password: string) {
 
 describe('US-03 autenticación', () => {
   beforeEach(async () => {
-    await resetDatabase();
+    await resetDatabase({ seedDemoFlights: false });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('responde un error genérico si un handler asíncrono falla', async () => {
+    vi.spyOn(User, 'findOne').mockRejectedValueOnce(new Error('detalle interno secreto'));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const response = await request(app).post('/api/auth/login').send({
+      email: 'admin@sigva.test',
+      password: 'Admin123!'
+    });
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({ message: 'Error interno del servidor.' });
+    expect(JSON.stringify(response.body)).not.toContain('detalle interno secreto');
   });
 
   it('login correcto devuelve token y usuario', async () => {
@@ -35,6 +54,15 @@ describe('US-03 autenticación', () => {
     expect(response.body.message).toContain('credenciales');
   });
 
+  it('email inexistente devuelve exactamente la misma respuesta que una contraseña errónea', async () => {
+    const [missing, incorrect] = await Promise.all([
+      request(app).post('/api/auth/login').send({ email: 'inexistente@sigva.test', password: 'cualquiera' }),
+      request(app).post('/api/auth/login').send({ email: 'admin@sigva.test', password: 'incorrecta' })
+    ]);
+    expect(missing.status).toBe(incorrect.status);
+    expect(missing.body).toEqual(incorrect.body);
+  });
+
   it('requiere sesión válida', async () => {
     const response = await request(app).get('/api/auth/me');
     expect(response.status).toBe(401);
@@ -57,12 +85,47 @@ describe('US-03 autenticación', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.ok).toBe(true);
+    const reusedToken = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`);
+    expect(reusedToken.status).toBe(401);
+  });
+  it('vence por inactividad y renueva la última actividad cuando hay uso válido', async () => {
+    expect(config.sessionTimeoutMinutes).toBe(Number(process.env.SESSION_TIMEOUT_MINUTES));
+    const token = await getToken('admin@sigva.test', 'Admin123!');
+    const sessionId = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()).sessionId as string;
+    const session = await Session.findByPk(sessionId);
+    expect(session).not.toBeNull();
+
+    const previousTimeout = config.sessionTimeoutMinutes;
+    config.sessionTimeoutMinutes = 0.01;
+    try {
+      const activityBefore = new Date(Date.now() - 500);
+      await session!.update({ lastActivity: activityBefore });
+      const validResponse = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`);
+      expect(validResponse.status).toBe(200);
+      const renewed = await Session.findByPk(sessionId);
+      expect(new Date(renewed!.get('lastActivity') as Date).getTime()).toBeGreaterThan(activityBefore.getTime());
+
+      await renewed!.update({ lastActivity: new Date(Date.now() - 1000) });
+      const expiredResponse = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`);
+      expect(expiredResponse.status).toBe(401);
+    } finally {
+      config.sessionTimeoutMinutes = previousTimeout;
+    }
+  });
+
+  it('aplica 401/403 por grupo de rutas', async () => {
+    const passengerToken = await getToken('pasajero@sigva.test', 'Pasajero123!');
+    expect((await request(app).get('/api/auth/me')).status).toBe(401);
+    expect((await request(app).get('/api/airports')).status).toBe(401);
+    expect((await request(app).get('/api/flights')).status).toBe(401);
+    expect((await request(app).get('/api/airports').set('Authorization', `Bearer ${passengerToken}`)).status).toBe(403);
+    expect((await request(app).get('/api/flights').set('Authorization', `Bearer ${passengerToken}`)).status).toBe(403);
   });
 });
 
 describe('US-06 aeropuertos', () => {
   beforeEach(async () => {
-    await resetDatabase();
+    await resetDatabase({ seedDemoFlights: false });
   });
 
   it('crea y lista aeropuertos del administrador', async () => {
@@ -120,9 +183,30 @@ describe('US-06 aeropuertos', () => {
     expect(removed.body.airport.isActive).toBe(false);
   });
 
+  it.each(['name', 'city', 'province'])('rechaza modificar un aeropuerto con %s vacío', async (field) => {
+    const token = await getToken('admin@sigva.test', 'Admin123!');
+    const airport = await Airport.findOne({ where: { iata: 'AEP' } });
+    const payload: Record<string, string> = {
+      iata: 'AEP',
+      name: 'Aeroparque Jorge Newbery',
+      city: 'Buenos Aires',
+      province: 'Buenos Aires'
+    };
+    payload[field] = '  ';
+
+    const response = await request(app)
+      .put(`/api/airports/${airport!.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
+
+    expect(response.status).toBe(400);
+    expect(response.body.errors[field]).toBeTruthy();
+    expect((await Airport.findByPk(airport!.id))?.get(field)).not.toBe('');
+  });
+
   it('rechaza desactivar aeropuerto usado por vuelo activo', async () => {
     const adminToken = await getToken('admin@sigva.test', 'Admin123!');
-    const created = await request(app)
+    await request(app)
       .post('/api/airports')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ iata: 'BUE', name: 'Unico', city: 'Buenos Aires', province: 'Buenos Aires' });

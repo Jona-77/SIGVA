@@ -1,8 +1,8 @@
 import request from 'supertest';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { performance } from 'node:perf_hooks';
 import { app } from '../app.js';
-import { Airport, Departure, Flight, ensureExampleFlightDepartures, resetDatabase } from '../db/index.js';
+import { Airport, Cancellation, Departure, Fare, Flight, FlightChangeHistory, ensureExampleFlightDepartures, resetDatabase } from '../db/index.js';
 import { setFlightTimeProvider, setFlightTodayProvider } from '../flights.js';
 
 const today = '2026-10-01';
@@ -58,12 +58,13 @@ async function insertFlights(count: number) {
 describe('US-07 crear vuelos', () => {
   beforeEach(async () => {
     setFlightTodayProvider(() => today);
-    await resetDatabase();
+    await resetDatabase({ seedDemoFlights: false });
   });
 
   afterEach(() => {
     setFlightTodayProvider();
     setFlightTimeProvider();
+    vi.restoreAllMocks();
   });
 
   it('crea un vuelo activo y genera nueve salidas para lunes y viernes de noviembre de 2026', async () => {
@@ -199,7 +200,292 @@ describe('US-07 crear vuelos', () => {
 describe('US-10 listado y consulta de vuelos', () => {
   beforeEach(async () => {
     setFlightTodayProvider(() => today);
-    await resetDatabase();
+    await resetDatabase({ seedDemoFlights: false });
+  });
+
+  describe('US-08 y US-09 modificación y cancelación', () => {
+    beforeEach(async () => {
+      setFlightTodayProvider(() => today);
+      await resetDatabase({ seedDemoFlights: false });
+    });
+
+    afterEach(() => {
+      setFlightTodayProvider();
+      setFlightTimeProvider();
+    });
+
+    it('permite modificar precio y horario de un vuelo cuyo período empezó antes de hoy', async () => {
+      const token = await tokenFor();
+      const flight = await Flight.findOne({ where: { flightNumber: 'AR1450' } });
+      await flight!.update({ availableFrom: '2026-09-17', availableTo: '2026-11-30' });
+
+      const response = await request(app)
+        .put(`/api/flights/${flight!.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ economyPrice: 13000, departureTime: '09:15', confirmed: true });
+
+      expect(response.status).toBe(200);
+      expect(response.body.flight).toMatchObject({ economyPrice: 13000, departureTime: '09:15' });
+    });
+
+    it('exige confirmed y mantiene las validaciones de fechas al modificar', async () => {
+      const token = await tokenFor();
+      const flight = await Flight.findOne({ where: { flightNumber: 'AR1450' } });
+      const missingConfirmation = await request(app)
+        .put(`/api/flights/${flight!.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ economyPrice: 15000 });
+      expect(missingConfirmation.status).toBe(409);
+      expect(missingConfirmation.body.requiresConfirmation).toBe(true);
+      expect(Number((await Flight.findByPk(flight!.id))!.economyPrice)).toBe(12500);
+
+      const invalid = await request(app)
+        .put(`/api/flights/${flight!.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ availableTo: '2026-10-31', confirmed: true });
+      expect(invalid.status).toBe(400);
+      expect(invalid.body.errors.availableTo).toBeTruthy();
+    });
+
+    it('rechaza capacidad menor a ventas en ambas clases y acepta el valor exacto o superior', async () => {
+      const token = await tokenFor();
+      const flight = await Flight.findOne({ where: { flightNumber: 'AR1450' } });
+      const departure = await Departure.create({
+        flightId: flight!.id, date: '2026-11-02', soldEconomy: 5, soldFirstClass: 2
+      });
+      const changeCapacity = (payload: Record<string, unknown>) => request(app)
+        .put(`/api/flights/${flight!.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ...payload, confirmed: true });
+
+      const economyTooLow = await changeCapacity({ economySeats: 4 });
+      expect(economyTooLow.status).toBe(400);
+      expect(economyTooLow.body.conflicts).toContainEqual(expect.objectContaining({
+        departureDate: departure.date,
+        field: 'economySeats'
+      }));
+
+      const firstClassTooLow = await changeCapacity({ firstClassSeats: 1 });
+      expect(firstClassTooLow.status).toBe(400);
+      expect(firstClassTooLow.body.conflicts).toContainEqual(expect.objectContaining({
+        departureDate: departure.date,
+        field: 'firstClassSeats'
+      }));
+
+      expect((await changeCapacity({ economySeats: 5, firstClassSeats: 2 })).status).toBe(200);
+      expect((await changeCapacity({ economySeats: 8, firstClassSeats: 4 })).status).toBe(200);
+    });
+
+    it('advierte cambios de días y período con ventas, conserva salidas pasadas y cancela las afectadas al confirmar', async () => {
+      const token = await tokenFor();
+      const flight = await Flight.findOne({ where: { flightNumber: 'AR1450' } });
+      await flight!.update({ availableFrom: '2026-09-01', availableTo: '2026-11-30' });
+      const past = await Departure.create({ flightId: flight!.id, date: '2026-09-28', soldEconomy: 1 });
+      const monday = await Departure.create({ flightId: flight!.id, date: '2026-11-02', soldEconomy: 3 });
+      const friday = await Departure.create({ flightId: flight!.id, date: '2026-11-06', soldFirstClass: 2 });
+      const unsold = await Departure.create({ flightId: flight!.id, date: '2026-11-09' });
+      const changes = { daysOfWeek: [2], availableTo: '2026-11-10', confirmed: true };
+
+      const warning = await request(app)
+        .put(`/api/flights/${flight!.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send(changes);
+      expect(warning.status).toBe(409);
+      expect(warning.body.conflicts.map((conflict: { departureDate: string }) => conflict.departureDate))
+        .toEqual(expect.arrayContaining([monday.date, friday.date]));
+      expect((await Departure.findByPk(monday.id))?.status).toBe('SCHEDULED');
+
+      const confirmed = await request(app)
+        .put(`/api/flights/${flight!.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ...changes, confirmedConflicts: true });
+      expect(confirmed.status).toBe(200);
+      expect((await Departure.findByPk(monday.id))?.status).toBe('CANCELLED');
+      expect((await Departure.findByPk(friday.id))?.status).toBe('CANCELLED');
+      expect(await Departure.findByPk(unsold.id)).toBeNull();
+      expect(await Departure.findByPk(past.id)).toMatchObject({ status: 'SCHEDULED', soldEconomy: 1 });
+      expect(await Cancellation.count({ where: { departureId: [monday.id, friday.id] } })).toBe(2);
+    });
+
+    it('guarda una entrada de historial por campo y normaliza los días antes de comparar', async () => {
+      const token = await tokenFor();
+      const flight = await Flight.findOne({ where: { flightNumber: 'AR1450' } });
+      const sameDays = await request(app)
+        .put(`/api/flights/${flight!.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ daysOfWeek: [5, 1], confirmed: true });
+      expect(sameDays.status).toBe(200);
+      expect(await FlightChangeHistory.count({ where: { flightId: flight!.id } })).toBe(0);
+
+      const changed = await request(app)
+        .put(`/api/flights/${flight!.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ economyPrice: 13500, departureTime: '09:00', confirmed: true });
+      expect(changed.status).toBe(200);
+      const detail = await request(app)
+        .get(`/api/flights/${flight!.id}`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(detail.body.flight.history).toHaveLength(2);
+      expect(detail.body.flight.history).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          field: 'economyPrice', previousValue: 12500, newValue: 13500,
+          userEmail: 'admin@sigva.test', userId: expect.any(Number), changedAt: expect.any(String)
+        }),
+        expect.objectContaining({
+          field: 'departureTime', previousValue: '08:30', newValue: '09:00',
+          userEmail: 'admin@sigva.test'
+        })
+      ]));
+    });
+
+    it('revierte historial y vuelo si falla la escritura de una tarifa', async () => {
+      const token = await tokenFor();
+      const flight = await Flight.findOne({ where: { flightNumber: 'AR1450' } });
+      vi.spyOn(Fare, 'upsert').mockRejectedValueOnce(new Error('fallo de tarifa'));
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const response = await request(app)
+        .put(`/api/flights/${flight!.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ economyPrice: 14000, confirmed: true });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ message: 'Error interno del servidor.' });
+      expect(Number((await Flight.findByPk(flight!.id))!.economyPrice)).toBe(12500);
+      expect(await FlightChangeHistory.count({ where: { flightId: flight!.id } })).toBe(0);
+      expect(await Fare.count({ where: { flightId: flight!.id } })).toBe(0);
+    });
+
+    it('registra una cancelación puntual una sola vez y rechaza la re-cancelación sin cambiar datos', async () => {
+      const token = await tokenFor();
+      const flight = await Flight.findOne({ where: { flightNumber: 'AR1450' } });
+      const departure = await Departure.create({
+        flightId: flight!.id, date: '2026-11-02', soldEconomy: 2, soldFirstClass: 1
+      });
+
+      const first = await request(app)
+        .post(`/api/flights/${flight!.id}/cancel`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ departureDate: departure.date });
+      expect(first.status).toBe(409);
+      expect(first.body.affectedPassengers).toBe(3);
+      const confirmed = await request(app)
+        .post(`/api/flights/${flight!.id}/cancel`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ departureDate: departure.date, confirmed: true });
+      expect(confirmed.status).toBe(200);
+
+      const afterFirst = await Departure.findByPk(departure.id);
+      const cancellationsAfterFirst = await Cancellation.count({ where: { departureId: departure.id } });
+      expect(cancellationsAfterFirst).toBe(1);
+      const second = await request(app)
+        .post(`/api/flights/${flight!.id}/cancel`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ departureDate: departure.date, confirmed: true });
+
+      expect(second.status).toBe(400);
+      expect(await Cancellation.count({ where: { departureId: departure.id } })).toBe(cancellationsAfterFirst);
+      expect(await Departure.findByPk(departure.id)).toMatchObject({
+        status: 'CANCELLED',
+        cancelledAt: afterFirst!.cancelledAt,
+        cancelledByUserId: afterFirst!.cancelledByUserId
+      });
+    });
+
+    it('cancela un vuelo completo sin borrar salidas y rechaza las re-cancelaciones', async () => {
+      const token = await tokenFor();
+      const flight = await Flight.findOne({ where: { flightNumber: 'AR1450' } });
+      const past = await Departure.create({ flightId: flight!.id, date: '2026-09-28' });
+      const futureA = await Departure.create({ flightId: flight!.id, date: '2026-11-02', soldEconomy: 2 });
+      const futureB = await Departure.create({ flightId: flight!.id, date: '2026-11-06', soldFirstClass: 3 });
+      const alreadyCancelled = await Departure.create({
+        flightId: flight!.id, date: '2026-11-09', status: 'CANCELLED', cancelledAt: '2026-09-01T00:00:00.000Z'
+      });
+      const warning = await request(app)
+        .post(`/api/flights/${flight!.id}/cancel`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({});
+      expect(warning.status).toBe(409);
+      expect(warning.body.affectedPassengers).toBe(5);
+
+      const response = await request(app)
+        .post(`/api/flights/${flight!.id}/cancel`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ confirmed: true });
+      expect(response.status).toBe(200);
+      expect(await Flight.findByPk(flight!.id)).toMatchObject({ status: 'CANCELLED', cancelledByUserId: expect.any(Number) });
+      expect(await Departure.findByPk(past.id)).toMatchObject({ status: 'SCHEDULED' });
+      expect(await Departure.findByPk(futureA.id)).toMatchObject({ status: 'CANCELLED', soldEconomy: 2 });
+      expect(await Departure.findByPk(futureB.id)).toMatchObject({ status: 'CANCELLED', soldFirstClass: 3 });
+      const preservedCancelled = await Departure.findByPk(alreadyCancelled.id);
+      expect(preservedCancelled?.status).toBe('CANCELLED');
+      expect(new Date(preservedCancelled!.cancelledAt!).toISOString()).toBe('2026-09-01T00:00:00.000Z');
+      expect(await Cancellation.count({ where: { flightId: flight!.id } })).toBe(1);
+      const cancelledFlight = await Flight.findByPk(flight!.id);
+
+      const repeated = await request(app)
+        .post(`/api/flights/${flight!.id}/cancel`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ confirmed: true });
+      const punctualAfterFlightCancel = await request(app)
+        .post(`/api/flights/${flight!.id}/cancel`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ departureDate: futureA.date, confirmed: true });
+      expect(repeated.status).toBe(400);
+      expect(punctualAfterFlightCancel.status).toBe(400);
+      expect(await Cancellation.count({ where: { flightId: flight!.id } })).toBe(1);
+      expect(await Flight.findByPk(flight!.id)).toMatchObject({
+        cancelledAt: cancelledFlight!.cancelledAt,
+        cancelledByUserId: cancelledFlight!.cancelledByUserId
+      });
+    });
+
+    it('rechaza modificar y cancelar para empleados y pasajeros', async () => {
+      const flight = await Flight.findOne({ where: { flightNumber: 'AR1450' } });
+      const employee = await tokenFor('empleado@sigva.test', 'Empleado123!');
+      const passenger = await tokenFor('pasajero@sigva.test', 'Pasajero123!');
+      for (const token of [employee, passenger]) {
+        expect((await request(app)
+          .put(`/api/flights/${flight!.id}`)
+          .set('Authorization', `Bearer ${token}`)
+          .send({ economyPrice: 13000, confirmed: true })).status).toBe(403);
+        expect((await request(app)
+          .post(`/api/flights/${flight!.id}/cancel`)
+          .set('Authorization', `Bearer ${token}`)
+          .send({ confirmed: true })).status).toBe(403);
+      }
+    });
+
+    it('siembra las salidas programadas futuras de vuelos activos solo en sus días y período', async () => {
+      await resetDatabase();
+      const flights = await Flight.findAll({ where: { status: 'ACTIVE' }, include: [{ model: Departure, as: 'departures' }] });
+
+      for (const flight of flights) {
+        const operatingDays = new Set(flight.daysOfWeek.split(',').map(Number));
+        for (const departure of flight.departures ?? []) {
+          if (departure.status !== 'SCHEDULED' || departure.date < today) continue;
+          const [year, month, day] = departure.date.split('-').map(Number);
+          const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay() || 7;
+          expect(departure.date >= flight.availableFrom).toBe(true);
+          expect(departure.date <= flight.availableTo).toBe(true);
+          expect(operatingDays.has(weekday)).toBe(true);
+        }
+      }
+      const example = flights.find((flight) => flight.flightNumber === 'AR1450')!;
+      const multiSale = flights.find((flight) => flight.flightNumber === 'AR2001')!;
+      const exampleSale = await Departure.findOne({ where: { flightId: example.id, soldEconomy: 5 } });
+      const multiSales = await Departure.findAll({ where: { flightId: multiSale.id, soldEconomy: 1 } });
+      expect(exampleSale).not.toBeNull();
+      expect(multiSales.length).toBeGreaterThan(0);
+      for (const [flight, sales] of [[example, [exampleSale!]], [multiSale, multiSales]] as const) {
+        const days = new Set(flight.daysOfWeek.split(',').map(Number));
+        expect(sales.every((departure) => {
+          const [year, month, day] = departure.date.split('-').map(Number);
+          return days.has(new Date(Date.UTC(year, month - 1, day)).getUTCDay() || 7)
+            && departure.date > today;
+        })).toBe(true);
+      }
+    });
   });
 
   afterEach(() => {
@@ -210,8 +496,10 @@ describe('US-10 listado y consulta de vuelos', () => {
   it('incluye las salidas del vuelo de ejemplo desde que se siembra la base', async () => {
     const flight = await Flight.findOne({ where: { flightNumber: 'AR1450' } });
     await Departure.destroy({ where: { flightId: flight!.id } });
+    await Departure.create({ flightId: flight!.id, date: '2026-11-01' });
     await ensureExampleFlightDepartures();
     await ensureExampleFlightDepartures();
+    expect(await Departure.findOne({ where: { flightId: flight!.id, date: '2026-11-01' } })).toBeNull();
 
     const token = await tokenFor();
     const response = await request(app)
@@ -265,10 +553,17 @@ describe('US-10 listado y consulta de vuelos', () => {
     const departures = await request(app).get('/api/flights?sortBy=departure').set('Authorization', `Bearer ${token}`);
     const routes = await request(app).get('/api/flights?sortBy=route').set('Authorization', `Bearer ${token}`);
     const lastRoutes = await request(app).get('/api/flights?page=2&sortBy=route').set('Authorization', `Bearer ${token}`);
+    const repeatedRoutes = await request(app).get('/api/flights?page=2&sortBy=route').set('Authorization', `Bearer ${token}`);
     expect(numbers.body.flights[0].flightNumber).toBe('AR1450');
     expect(departures.body.flights[0].departureTime).toBe('00:00');
     expect(routes.body.flights[0].origin.iata).toBe('AEP');
     expect(lastRoutes.body.flights.at(-1).origin.iata).toBe('COR');
+    expect(lastRoutes.body.flights.map((flight: { id: number }) => flight.id))
+      .toEqual(repeatedRoutes.body.flights.map((flight: { id: number }) => flight.id));
+    expect(new Set([
+      ...routes.body.flights.map((flight: { id: number }) => flight.id),
+      ...lastRoutes.body.flights.map((flight: { id: number }) => flight.id)
+    ]).size).toBe(routes.body.pagination.total);
   });
 
   it('muestra el detalle completo y disponibilidad por clase', async () => {

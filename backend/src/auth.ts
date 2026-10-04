@@ -1,11 +1,13 @@
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from './config.js';
+import { Session } from './db/index.js';
 
 type AuthUser = {
   id: number;
   email: string;
   role: string;
+  sessionId: string;
 };
 
 declare global {
@@ -33,12 +35,43 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
     return res.status(401).json({ message: 'Sesión no válida o expirada.' });
   }
 
+  void authenticate(token, req, res, next);
+}
+
+async function authenticate(token: string, req: Request, res: Response, next: NextFunction) {
+  let decoded: jwt.JwtPayload;
   try {
-    const decoded = jwt.verify(token, config.jwtSecret) as { userId: number; role: string; email: string };
-    req.user = { id: decoded.userId, email: decoded.email, role: decoded.role };
-    return next();
+    const value = jwt.verify(token, config.jwtSecret);
+    if (typeof value === 'string') {
+      return res.status(401).json({ message: 'Sesión no válida o expirada.' });
+    }
+    decoded = value;
   } catch {
     return res.status(401).json({ message: 'Sesión no válida o expirada.' });
+  }
+
+  if (typeof decoded.userId !== 'number' || typeof decoded.email !== 'string'
+    || typeof decoded.role !== 'string' || typeof decoded.sessionId !== 'string') {
+    return res.status(401).json({ message: 'Sesión no válida o expirada.' });
+  }
+
+  try {
+    const session = await Session.findByPk(decoded.sessionId);
+    const now = new Date();
+    if (!session || session.get('revoked') || now.getTime() - new Date(session.get('lastActivity') as Date).getTime()
+      > config.sessionTimeoutMinutes * 60_000) {
+      return res.status(401).json({ message: 'Sesión no válida o expirada.' });
+    }
+    await session.update({ lastActivity: now });
+    req.user = {
+      id: decoded.userId,
+      email: decoded.email,
+      role: decoded.role,
+      sessionId: decoded.sessionId
+    };
+    return next();
+  } catch (error) {
+    return next(error);
   }
 }
 

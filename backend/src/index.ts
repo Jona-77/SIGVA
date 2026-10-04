@@ -1,11 +1,7 @@
-import { app, startServer, syncDatabase } from './app.js';
-import { config } from './config.js';
+import { startServer } from './app.js';
 
 async function main() {
-  await syncDatabase();
-  app.listen(config.port, () => {
-    console.log(`SIGVA backend listening on http://localhost:${config.port}`);
-  });
+  await startServer();
 }
 
 main().catch((error) => {
@@ -13,4 +9,4 @@ main().catch((error) => {
   process.exit(1);
 });
 
-export { app, startServer };
+export { startServer };

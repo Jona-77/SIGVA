@@ -8,7 +8,13 @@ Luego de ingresar como administrador, la opción **Vuelos** permite consultar, f
 
 ## Flujo de demo
 
-1. Iniciar sesión como administrador con `admin@sigva.test` / `Admin123!`.
+| Rol | Email | Contraseña |
+|---|---|---|
+| Administrador | `admin@sigva.test` | `Admin123!` |
+| Empleado | `empleado@sigva.test` | `Empleado123!` |
+| Pasajero | `pasajero@sigva.test` | `Pasajero123!` |
+
+1. Iniciar sesión como administrador con las credenciales de la tabla.
 2. Crear dos aeropuertos (por ejemplo `AEP` y `COR`) desde la administración.
 3. Crear un vuelo con un período de noviembre de 2026 y verificar que se generen 9 salidas para lunes y viernes.
 4. Consultar el listado y el detalle del vuelo, comprobando horarios, salidas y disponibilidad por clase.
@@ -52,6 +58,15 @@ Copia `./.env.example` y ajusta valores locales:
 cp .env.example .env
 ```
 
+| Variable | Uso | Valor local |
+|---|---|---|
+| `JWT_SECRET` | Firma de sesiones; obligatorio al iniciar la API. | Reemplazar el ejemplo por un secreto aleatorio propio. |
+| `SESSION_TIMEOUT_MINUTES` | Minutos de inactividad antes de invalidar la sesión. | `30` |
+| `PORT` | Puerto de la API. | `3001` |
+| `CLIENT_URL` | Origen permitido por CORS. | `http://localhost:5173` |
+| `DB_PATH` | Archivo SQLite. | `./backend/data/sigva.sqlite` |
+| `VITE_API_URL` | URL de la API consumida por el frontend. | No definir para usar `http://localhost:3001`. |
+
 ## Ejecutar
 
 Backend:
@@ -72,6 +87,8 @@ npm --prefix frontend run dev
 npm --prefix backend run db:reset
 npm --prefix backend run test
 npm --prefix frontend run build
+npm run lint
+npm run format
 npm run ci
 ```
 
@@ -87,4 +104,14 @@ La rama `main` debe protegerse en GitHub:
 
 ## Entorno de demostración
 
-La demostración del sprint se ejecuta desde el entorno local de desarrollo configurado en la máquina de la comisón, o desde un despliegue estático del frontend y una instancia local del backend en un entorno compartido. En esta tanda se documenta la configuración de ejecución y no se asume un despliegue público habilitado.
+El repositorio incluye `render.yaml` para preparar un frontend estático y una API de demostración. **No se afirma que exista un despliegue activo ni que la demo esté desplegada.**
+
+1. Una persona crea una cuenta en Render y conecta este repositorio a su cuenta.
+2. En Render, crea un Blueprint desde el repositorio y acepta los dos servicios definidos en `render.yaml`.
+3. La persona carga el secreto `JWT_SECRET` en el servicio `sigva-api` desde el panel de Render. Debe generar un valor aleatorio privado; no reutilizar el texto de ejemplo.
+4. Render construye ambos servicios. Si los nombres `sigva-api` o `sigva-demo` ya están ocupados, asignar nombres únicos en el Blueprint y actualizar `CLIENT_URL` con la URL pública real del frontend y `VITE_API_URL` con la URL pública real de la API antes de desplegar.
+5. Compartir con ambas comisiones la URL pública del frontend que Render muestre. La API usa `DB_PATH=/tmp/sigva.sqlite`, un filesystem efímero: la base de datos se pierde al reiniciar el servicio y se vuelve a crear y sembrar con los datos demo. Este comportamiento es esperado y suficiente para la demo; no es almacenamiento persistente.
+
+El sitio estático incluye una regla de rewrite `/*` → `/index.html` para que refrescar o abrir una ruta interna de React Router no devuelva 404.
+
+Las otras variables están definidas en `render.yaml`: `SESSION_TIMEOUT_MINUTES`, `PORT`, `CLIENT_URL`, `DB_PATH` y `VITE_API_URL`. `JWT_SECRET` requiere carga manual en el panel; crear la cuenta, conectar el repositorio y entregar la URL también son pasos humanos.
