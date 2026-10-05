@@ -5,35 +5,11 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="2f52b9d5-eb6f-47a0-a46c-9d3e3249ce46" name="Changes" comment="fix render">
-      <change beforePath="$PROJECT_DIR$/.github/workflows/ci.yml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/.gitignore" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/modules.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/CONTRIBUTING.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/eslint.config.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/backend/package-lock.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/backend/package.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/src/app.ts" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/app.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/src/tests/auth.test.ts" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/src/tests/flights.test.ts" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/src/tests/setup.ts" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/vitest.config.ts" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/CHECKLIST_CRITERIOS.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/DECISIONES.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/VERIFICACION.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/modelo-datos.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/prototipos/US-07-crear-vuelo.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/eslint.config.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/package-lock.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/package.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/referencia/ENUNCIADO_SIGVA.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/referencia/SPRINT_0_SIGVA.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/verificacion/parte-a.mjs" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/verificacion/parte-b.mjs" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/Flights.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/Flights.tsx" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -45,10 +21,12 @@
       <entry key="_C:/Users/User/Downloads/Administracion de  proyectos/Implementacion/SIGVA" value="3KCNcdD6wvjvk3djMY5jOPGYZI2" />
     </persistenceIdMap>
   </component>
-  <component name="DatabaseLocalColorSettings">
-    <colors>
-      <entry key="a9fe4f65-61b5-4eb4-b7a9-49dfef1edf15" value="" />
-    </colors>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="TypeScript File" />
+      </list>
+    </option>
   </component>
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
@@ -81,7 +59,7 @@
   <component name="ProjectSessionTemplates">
     <option name="panelTemplate">
       <template>
-        <option name="modeId" value="Agent" />
+        <option name="modeId" value="Ask" />
         <option name="model">
           <model>
             <option name="modelType" value="builtin_id" />
@@ -154,9 +132,9 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Vitest.auth.test.ts" />
         <item itemvalue="Node.js.parte-a.mjs" />
         <item itemvalue="Vitest.flights.test.ts" />
-        <item itemvalue="Vitest.auth.test.ts" />
         <item itemvalue="Vitest.Tests in tests\" />
       </list>
     </recent_temporary>
@@ -180,7 +158,10 @@
       <workItem from="1791058094188" duration="165000" />
       <workItem from="1791058267653" duration="8194000" />
       <workItem from="1791067198534" duration="47000" />
-      <workItem from="1791073985324" duration="8687000" />
+      <workItem from="1791073985324" duration="8941000" />
+      <workItem from="1791083028797" duration="8000" />
+      <workItem from="1791121543174" duration="1008000" />
+      <workItem from="1791157226928" duration="1782000" />
     </task>
     <task id="LOCAL-00001" summary="fix bugs">
       <option name="closed" value="true" />
@@ -206,7 +187,23 @@
       <option name="project" value="LOCAL" />
       <updated>1791081362003</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="fix render">
+      <option name="closed" value="true" />
+      <created>1791082706122</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1791082706122</updated>
+    </task>
+    <task id="LOCAL-00005" summary="fix render">
+      <option name="closed" value="true" />
+      <created>1791082744618</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1791082744618</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -217,13 +214,16 @@
         <option value="$PROJECT_DIR$/frontend/vite.config.js" />
         <option value="$PROJECT_DIR$/frontend/vite.config.d.ts" />
         <option value="$PROJECT_DIR$/frontend/vite.config.js" />
+        <option value="$PROJECT_DIR$/frontend/vite.config.d.ts" />
+        <option value="$PROJECT_DIR$/frontend/vite.config.js" />
       </list>
     </option>
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="fix bugs" />
     <MESSAGE value="fix render" />
-    <option name="LAST_COMMIT_MESSAGE" value="fix render" />
+    <MESSAGE value="Codigo sin archivos innecesarios ni comentarios" />
+    <option name="LAST_COMMIT_MESSAGE" value="Codigo sin archivos innecesarios ni comentarios" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
