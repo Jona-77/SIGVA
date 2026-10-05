@@ -54,10 +54,22 @@ type FlightDetail = FlightSummary & {
 type ApiError = Error & {
   fields?: Record<string, string>;
   requiresConfirmation?: boolean;
-  conflicts?: Array<{ departureDate: string; reason?: string }>;
+  conflicts?: Array<{
+    departureDate: string;
+    field?: string;
+    soldEconomy?: number;
+    soldFirstClass?: number;
+    requestedSeats?: number;
+    reason?: string;
+  }>;
   affectedPassengers?: number;
   totalDepartures?: number;
 };
+
+function formatDepartureDate(departureDate: string) {
+  const [year, month, day] = departureDate.split('-');
+  return year && month && day ? `${day}/${month}/${year}` : departureDate;
+}
 
 async function flightsRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem('sigva-token');
@@ -388,6 +400,7 @@ function FlightEdit({ flight, onUpdated, onCancel }: {
   const [days, setDays] = useState(flight.daysOfWeek.split(',').map(Number));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [message, setMessage] = useState('');
+  const [conflicts, setConflicts] = useState<ApiError['conflicts']>([]);
 
   useEffect(() => {
     void flightsRequest<{ airports: Airport[] }>('/api/airports?active=true')
@@ -398,6 +411,7 @@ function FlightEdit({ flight, onUpdated, onCancel }: {
   const update = (field: keyof typeof form, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
     setErrors((current) => ({ ...current, [field]: '' }));
+    setConflicts([]);
   };
 
   function fieldError(field: string) {
@@ -426,6 +440,7 @@ function FlightEdit({ flight, onUpdated, onCancel }: {
     event.preventDefault();
     setErrors({});
     setMessage('');
+    setConflicts([]);
     const approved = window.confirm('¿Confirma guardar los cambios realizados en este vuelo?');
     if (!approved) return;
 
@@ -447,11 +462,13 @@ function FlightEdit({ flight, onUpdated, onCancel }: {
           const retryError = retryReason as ApiError;
           setMessage(retryError.message || 'No se pudo modificar el vuelo.');
           setErrors(retryError.fields ?? {});
+          setConflicts(retryError.conflicts ?? []);
         }
         return;
       }
       setMessage(error.message || 'No se pudo modificar el vuelo.');
       setErrors(error.fields ?? {});
+      setConflicts(error.conflicts ?? []);
     }
   }
 
@@ -469,9 +486,12 @@ function FlightEdit({ flight, onUpdated, onCancel }: {
                 <input
                   type="checkbox"
                   checked={days.includes(day.value)}
-                  onChange={(event) => setDays((current) => event.target.checked
-                    ? [...current, day.value].sort()
-                    : current.filter((value) => value !== day.value))}
+                  onChange={(event) => {
+                    setDays((current) => event.target.checked
+                      ? [...current, day.value].sort()
+                      : current.filter((value) => value !== day.value));
+                    setConflicts([]);
+                  }}
                 />
                 {day.label}
               </label>
@@ -536,6 +556,19 @@ function FlightEdit({ flight, onUpdated, onCancel }: {
           </label>
         </div>
         {message && <div className="error-box" role="alert">{message}</div>}
+        {conflicts?.some((conflict) => conflict.field === 'economySeats' || conflict.field === 'firstClassSeats') && (
+          <ul className="field-error" aria-label="Salidas con conflictos de capacidad">
+            {conflicts.filter((conflict) => conflict.field === 'economySeats' || conflict.field === 'firstClassSeats').map((conflict, index) => {
+              const className = conflict.field === 'economySeats' ? 'Economy' : 'Primera clase';
+              const sold = conflict.field === 'economySeats' ? conflict.soldEconomy : conflict.soldFirstClass;
+              return (
+                <li key={`${conflict.departureDate}-${conflict.field}-${index}`}>
+                  {formatDepartureDate(conflict.departureDate)}: {sold} {className} vendidos, capacidad pedida {conflict.requestedSeats}
+                </li>
+              );
+            })}
+          </ul>
+        )}
         <div className="form-actions">
           <button type="submit">Guardar cambios</button>
           <button type="button" onClick={onCancel}>Cancelar edición</button>

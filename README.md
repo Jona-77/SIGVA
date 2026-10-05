@@ -41,6 +41,17 @@ API: <http://localhost:3001>
 
 Estado de la API: <http://localhost:3001/api/health>
 
+## Verificar compilación y tests del backend
+
+Desde la raíz del repositorio, ejecuta:
+
+```bash
+npm --prefix backend run build
+npm --prefix backend test
+```
+
+El primer comando verifica la compilación TypeScript del backend. El segundo ejecuta todas las suites de `backend/tests`; Vitest las corre en serie porque comparten la base de datos SQLite. La ejecución termina correctamente cuando todas las suites y sus tests aparecen como aprobados.
+
 ## Usuario de demo
 
 - Administrador: `admin@sigva.test`
