@@ -352,6 +352,7 @@ export class IdModel extends Model<InferAttributes<IdModel>, InferCreationAttrib
   declare lastName?: string;
   declare documentType?: string;
   declare documentNumber?: string;
+  declare birthDate?: string | null;
   declare email?: string;
   declare code?: string;
   declare name?: string;
@@ -388,6 +389,7 @@ export const Passenger = sequelize.define<IdModel>('Passenger', {
   lastName: { type: DataTypes.STRING, allowNull: false },
   documentType: { type: DataTypes.STRING, allowNull: false },
   documentNumber: { type: DataTypes.STRING, allowNull: false, unique: true },
+  birthDate: { type: DataTypes.DATEONLY, allowNull: true },
   email: { type: DataTypes.STRING, allowNull: false }
 }, { tableName: 'passengers' });
 

@@ -190,6 +190,22 @@ th, td {
   font-weight: 400;
 }
 
+label input[aria-invalid="true"], label select[aria-invalid="true"] {
+  border-color: #b42318;
+}
+
+.field-hint {
+  color: #53657d;
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+.selection-form {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e7edf7;
+}
+
 .weekday-options {
   border: 1px solid #d7dfeb;
   border-radius: 8px;

@@ -4,9 +4,12 @@
     <option name="selectedModelId" value="auto" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="2f52b9d5-eb6f-47a0-a46c-9d3e3249ce46" name="Changes" comment="Fix US-08 frontend y agrego test borrados por copilot">
+    <list default="true" id="2f52b9d5-eb6f-47a0-a46c-9d3e3249ce46" name="Changes" comment="Sprint 2 – Tanda A: tests Sprint 1 y corrección US-08">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/src/app.ts" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/app.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/src/db/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/db/index.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/App.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/App.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/styles.css" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -73,29 +76,30 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
-    &quot;Node.js.parte-a.mjs.executor&quot;: &quot;Run&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
-    &quot;Vitest.Tests in tests\\.executor&quot;: &quot;Run&quot;,
-    &quot;Vitest.auth.test.ts.executor&quot;: &quot;Run&quot;,
-    &quot;Vitest.flights.test.ts.executor&quot;: &quot;Run&quot;,
-    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
-    &quot;copilot.chat.legacySessionMetadata.migrated&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;Codigo-Limpio-Sin-Comentarios&quot;,
-    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/User/Downloads/Administracion de  proyectos/Proyecto/Implementacion/SIGVA&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;onboarding.tips.debug.path&quot;: &quot;C:/Users/User/Downloads/Administracion de  proyectos/Implementacion/SIGVA/src/Main.java&quot;,
-    &quot;ts.external.directory.path&quot;: &quot;C:\\Users\\User\\AppData\\Roaming\\JetBrains\\IntelliJIdea2026.2\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external&quot;,
-    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Node.js.parte-a.mjs.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "Vitest.Tests in tests\\.executor": "Run",
+    "Vitest.auth.test.ts.executor": "Run",
+    "Vitest.flights.test.ts.executor": "Run",
+    "Vitest.tanda-b.test.ts.executor": "Run",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "copilot.chat.legacySessionMetadata.migrated": "true",
+    "git-widget-placeholder": "Codigo-Limpio-Sin-Comentarios",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "C:/Users/User/Downloads/Administracion de  proyectos/Proyecto/Implementacion/SIGVA",
+    "nodejs_package_manager_path": "npm",
+    "onboarding.tips.debug.path": "C:/Users/User/Downloads/Administracion de  proyectos/Implementacion/SIGVA/src/Main.java",
+    "ts.external.directory.path": "C:\\Users\\User\\Downloads\\Administracion de  proyectos\\Proyecto\\Implementacion\\SIGVA\\backend\\node_modules\\typescript\\lib",
+    "vue.rearranger.settings.migration": "true"
   }
-}</component>
-  <component name="RunManager" selected="Vitest.auth.test.ts">
+}]]></component>
+  <component name="RunManager" selected="Vitest.tanda-b.test.ts">
     <configuration name="Tests in tests\" type="JavaScriptTestRunnerVitest" temporary="true" nameIsGenerated="true">
       <node-interpreter value="project" />
       <vitest-package value="$PROJECT_DIR$/backend/node_modules/vitest" />
@@ -126,11 +130,22 @@
       <test-file value="$PROJECT_DIR$/backend/src/tests/flights.test.ts" />
       <method v="2" />
     </configuration>
+    <configuration name="tanda-b.test.ts" type="JavaScriptTestRunnerVitest" temporary="true" nameIsGenerated="true">
+      <node-interpreter value="project" />
+      <vitest-package value="$PROJECT_DIR$/backend/node_modules/vitest" />
+      <working-dir value="$PROJECT_DIR$/backend" />
+      <vitest-options value="--run" />
+      <envs />
+      <scope-kind value="TEST_FILE" />
+      <test-file value="$PROJECT_DIR$/backend/tests/tanda-b.test.ts" />
+      <method v="2" />
+    </configuration>
     <configuration name="parte-a.mjs" type="NodeJSConfigurationType" temporary="true" nameIsGenerated="true" path-to-js-file="$PROJECT_DIR$/verificacion/parte-a.mjs" working-dir="$PROJECT_DIR$/verificacion">
       <method v="2" />
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Vitest.tanda-b.test.ts" />
         <item itemvalue="Node.js.parte-a.mjs" />
         <item itemvalue="Vitest.flights.test.ts" />
         <item itemvalue="Vitest.auth.test.ts" />
@@ -162,7 +177,7 @@
       <workItem from="1791121543174" duration="1008000" />
       <workItem from="1791157226928" duration="2337000" />
       <workItem from="1792282997631" duration="228000" />
-      <workItem from="1792283235489" duration="313000" />
+      <workItem from="1792283235489" duration="2440000" />
     </task>
     <task id="LOCAL-00001" summary="fix bugs">
       <option name="closed" value="true" />
@@ -220,7 +235,15 @@
       <option name="project" value="LOCAL" />
       <updated>1791159361492</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="Sprint 2 – Tanda A: tests Sprint 1 y corrección US-08">
+      <option name="closed" value="true" />
+      <created>1792283688692</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1792283688692</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -242,7 +265,8 @@
     <MESSAGE value="Codigo sin archivos innecesarios ni comentarios" />
     <MESSAGE value="Fix US-08 frontend" />
     <MESSAGE value="Fix US-08 frontend y agrego test borrados por copilot" />
-    <option name="LAST_COMMIT_MESSAGE" value="Fix US-08 frontend y agrego test borrados por copilot" />
+    <MESSAGE value="Sprint 2 – Tanda A: tests Sprint 1 y corrección US-08" />
+    <option name="LAST_COMMIT_MESSAGE" value="Sprint 2 – Tanda A: tests Sprint 1 y corrección US-08" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
