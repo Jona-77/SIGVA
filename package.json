@@ -5,6 +5,8 @@
   "scripts": {
     "db:reset": "npm --prefix backend run db:reset",
     "backend:dev": "npm --prefix backend run dev",
-    "frontend:dev": "npm --prefix frontend run dev"
+    "frontend:dev": "npm --prefix frontend run dev",
+    "test": "npm --prefix backend run test",
+    "ci": "npm --prefix backend run build && npm --prefix backend run test && npm --prefix frontend run build"
   }
 }

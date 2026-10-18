@@ -4,12 +4,9 @@
     <option name="selectedModelId" value="auto" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="2f52b9d5-eb6f-47a0-a46c-9d3e3249ce46" name="Changes" comment="fix render">
-      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+    <list default="true" id="2f52b9d5-eb6f-47a0-a46c-9d3e3249ce46" name="Changes" comment="Fix US-08 frontend y agrego test borrados por copilot">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/backend/package-lock.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/backend/package.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/Flights.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/Flights.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -19,6 +16,7 @@
   <component name="CopilotPersistence">
     <persistenceIdMap>
       <entry key="_C:/Users/User/Downloads/Administracion de  proyectos/Implementacion/SIGVA" value="3KCNcdD6wvjvk3djMY5jOPGYZI2" />
+      <entry key="_C:/Users/User/Downloads/Administracion de  proyectos/Proyecto/Implementacion/SIGVA" value="3KqRm3bkKJbanSSNhQjkrHyUSlM" />
     </persistenceIdMap>
   </component>
   <component name="FileTemplateManagerImpl">
@@ -59,7 +57,7 @@
   <component name="ProjectSessionTemplates">
     <option name="panelTemplate">
       <template>
-        <option name="modeId" value="Ask" />
+        <option name="modeId" value="Agent" />
         <option name="model">
           <model>
             <option name="modelType" value="builtin_id" />
@@ -90,6 +88,7 @@
     &quot;copilot.chat.legacySessionMetadata.migrated&quot;: &quot;true&quot;,
     &quot;git-widget-placeholder&quot;: &quot;Codigo-Limpio-Sin-Comentarios&quot;,
     &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/User/Downloads/Administracion de  proyectos/Proyecto/Implementacion/SIGVA&quot;,
     &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
     &quot;onboarding.tips.debug.path&quot;: &quot;C:/Users/User/Downloads/Administracion de  proyectos/Implementacion/SIGVA/src/Main.java&quot;,
     &quot;ts.external.directory.path&quot;: &quot;C:\\Users\\User\\AppData\\Roaming\\JetBrains\\IntelliJIdea2026.2\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external&quot;,
@@ -132,9 +131,9 @@
     </configuration>
     <recent_temporary>
       <list>
-        <item itemvalue="Vitest.auth.test.ts" />
         <item itemvalue="Node.js.parte-a.mjs" />
         <item itemvalue="Vitest.flights.test.ts" />
+        <item itemvalue="Vitest.auth.test.ts" />
         <item itemvalue="Vitest.Tests in tests\" />
       </list>
     </recent_temporary>
@@ -161,7 +160,9 @@
       <workItem from="1791073985324" duration="8941000" />
       <workItem from="1791083028797" duration="8000" />
       <workItem from="1791121543174" duration="1008000" />
-      <workItem from="1791157226928" duration="1782000" />
+      <workItem from="1791157226928" duration="2337000" />
+      <workItem from="1792282997631" duration="228000" />
+      <workItem from="1792283235489" duration="313000" />
     </task>
     <task id="LOCAL-00001" summary="fix bugs">
       <option name="closed" value="true" />
@@ -203,7 +204,23 @@
       <option name="project" value="LOCAL" />
       <updated>1791082744618</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="Fix US-08 frontend">
+      <option name="closed" value="true" />
+      <created>1791159298351</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1791159298351</updated>
+    </task>
+    <task id="LOCAL-00007" summary="Fix US-08 frontend y agrego test borrados por copilot">
+      <option name="closed" value="true" />
+      <created>1791159361492</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1791159361492</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -223,7 +240,9 @@
     <MESSAGE value="fix bugs" />
     <MESSAGE value="fix render" />
     <MESSAGE value="Codigo sin archivos innecesarios ni comentarios" />
-    <option name="LAST_COMMIT_MESSAGE" value="Codigo sin archivos innecesarios ni comentarios" />
+    <MESSAGE value="Fix US-08 frontend" />
+    <MESSAGE value="Fix US-08 frontend y agrego test borrados por copilot" />
+    <option name="LAST_COMMIT_MESSAGE" value="Fix US-08 frontend y agrego test borrados por copilot" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
