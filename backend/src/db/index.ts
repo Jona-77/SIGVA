@@ -746,7 +746,8 @@ export async function seedDatabase(options: { seedDemoFlights?: boolean } = {}) 
   const soldCount = 5;
   await soldDeparture!.update({ soldEconomy: soldCount });
   const confirmedPurchase = await Purchase.create({
-    passengerId: passenger.id, status: 'CONFIRMED', total: soldCount * Number(soldFlight.economyPrice)
+    passengerId: passenger.id, status: 'CONFIRMED', quantity: soldCount,
+    total: soldCount * Number(soldFlight.economyPrice)
   });
   await Ticket.bulkCreate(Array.from({ length: soldCount }, () => ({
     purchaseId: confirmedPurchase.id,
@@ -759,7 +760,12 @@ export async function seedDatabase(options: { seedDemoFlights?: boolean } = {}) 
     const departure = await Departure.findOne({ where: { flightId: multiSaleFlight.id, date } });
     if (departure) {
       await departure.update({ soldEconomy: 1 });
-      const purchase = await Purchase.create({ passengerId: passenger.id, status: 'CONFIRMED', total: multiSaleFlight.economyPrice });
+      const purchase = await Purchase.create({
+        passengerId: passenger.id,
+        status: 'CONFIRMED',
+        quantity: 1,
+        total: multiSaleFlight.economyPrice
+      });
       await Ticket.create({
         purchaseId: purchase.id, departureId: departure.id, classId: economy.id, price: multiSaleFlight.economyPrice,
         ticketCode: `SIGVA-${randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase()}`

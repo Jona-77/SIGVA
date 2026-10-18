@@ -86,6 +86,24 @@ describe('US-17 pago y registro de transacciones', () => {
     setPaymentGateway(localGateway);
   });
 
+  it('siembra cada compra confirmada con la cantidad real de tickets emitidos', async () => {
+    const confirmedPurchases = await Purchase.findAll({
+      where: { status: 'CONFIRMED' },
+      attributes: ['id', 'quantity']
+    });
+    let ticketCount = 0;
+    let confirmedQuantity = 0;
+
+    for (const purchase of confirmedPurchases) {
+      const purchaseTicketCount = await Ticket.count({ where: { purchaseId: purchase.id } });
+      expect(Number(purchase.quantity)).toBe(purchaseTicketCount);
+      ticketCount += purchaseTicketCount;
+      confirmedQuantity += Number(purchase.quantity);
+    }
+
+    expect(ticketCount).toBe(confirmedQuantity);
+  });
+
   it('aprueba, vende, registra todos los datos y emite un pasaje por pasajero una sola vez', async () => {
     const token = await registerAndLogin(1);
     const { departure } = await nextDeparture();

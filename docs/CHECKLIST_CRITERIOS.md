@@ -26,7 +26,7 @@ Estados: ✅ verificado; ⏳ implementado o documentado, falta ejecutar/verifica
 ## US-14 Datos de pasajeros
 
 - [x] US-14.1 Formulario por pasajero con nombre, apellido, documento y nacimiento. Verificación: automática, suite C registrada como completada.
-- [x] US-14.2 Titular precargado desde el perfil. Verificación: automática/manual, suites B/C registradas como completadas.
+- [ ] US-14.2 Titular precargado desde el perfil. Verificación: 👤 verificación en navegador.
 - [x] US-14.3 Validaciones de campos, fechas y documentos repetidos. Verificación: automática, suite C registrada como completada.
 - [x] US-14.4 Datos asociados a la compra y reserva. Verificación: automática, suite C registrada como completada.
 
@@ -49,7 +49,7 @@ Estados: ✅ verificado; ⏳ implementado o documentado, falta ejecutar/verifica
 ## Historias técnicas
 
 - [x] HT-01.1 Pruebas del Sprint #1 en un comando. Verificación: automática, Tanda A registrada como completada.
-- [x] HT-02.1 Conflictos de capacidad US-08 visibles por salida y clase. Verificación: manual/automática, Tanda A registrada como completada.
+- [ ] HT-02.1 Conflictos de capacidad US-08 visibles por salida y clase. Verificación: 👤 verificación en navegador.
 
 ## Definition of Done
 
@@ -62,4 +62,4 @@ Estados: ✅ verificado; ⏳ implementado o documentado, falta ejecutar/verifica
 - [ ] DoD-7 Incremento desplegado en el entorno demo. Verificación: 👤 pendiente; no se realizó despliegue.
 - [x] DoD-8 Modelo de datos y decisiones actualizados. Verificación: manual, `PRAGMA table_info` contrastado después de `npm run db:reset`; índices únicos de referencia y código comprobados.
 - [x] DoD-9 Pruebas del Sprint #1 completas y previas a historias nuevas. Verificación: automática, Tanda A registrada como completada.
-- [x] DoD-10 Conflictos de capacidad US-08 indicados en pantalla. Verificación: manual/automática, Tanda A registrada como completada.
+- [ ] DoD-10 Conflictos de capacidad US-08 indicados en pantalla. Verificación: 👤 verificación en navegador.
