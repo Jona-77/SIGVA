@@ -11,10 +11,14 @@ export const config = {
   port: Number(process.env.PORT ?? 3001),
   jwtSecret: jwtSecret ?? '',
   sessionTimeoutMinutes: Number(process.env.SESSION_TIMEOUT_MINUTES ?? 30),
+  reservationMinutes: Number(process.env.RESERVATION_MINUTES ?? 10),
   clientUrl: process.env.CLIENT_URL ?? 'http://localhost:5173',
   dbPath: path.resolve(repoRoot, dbPathFromEnv)
 };
 
 if (!Number.isFinite(config.sessionTimeoutMinutes) || config.sessionTimeoutMinutes <= 0) {
   throw new Error('SESSION_TIMEOUT_MINUTES debe ser un número mayor que cero.');
+}
+if (!Number.isFinite(config.reservationMinutes) || config.reservationMinutes <= 0) {
+  throw new Error('RESERVATION_MINUTES debe ser un número mayor que cero.');
 }

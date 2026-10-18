@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, Navigate, Route, Routes } from 'react-router-dom';
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { FlightsPage } from './Flights.js';
 
 type User = {
@@ -12,6 +12,48 @@ type User = {
 type AuthResponse = {
   token: string;
   user: User;
+};
+
+type FieldErrors = Record<string, string>;
+
+class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly fields: FieldErrors) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+type SearchResult = {
+  id: number;
+  flightNumber: string;
+  origin: string;
+  destination: string;
+  departure: string;
+  arrival: string;
+  duration: string;
+  classes: Array<{ code: string; name: string; price: number; available: number; soldOut: boolean }>;
+};
+
+type PurchaseSelection = {
+  departure: SearchResult;
+  classCode: string;
+  className: string;
+  quantity: number;
+  total: number;
+};
+
+type PassengerForm = {
+  firstName: string;
+  lastName: string;
+  document: string;
+  birthDate: string;
+};
+
+type Reservation = {
+  id: number;
+  status: string;
+  total: number;
+  expiresAt: string;
 };
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
@@ -28,9 +70,8 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T
   });
 
   if (!response.ok) {
-    const errorBody = await response.json().catch(() => ({}));
-    const message = errorBody.message || 'Error de solicitud';
-    throw new Error(message);
+    const errorBody = await response.json().catch(() => ({})) as { message?: string; errors?: FieldErrors };
+    throw new ApiError(errorBody.message || 'Error de solicitud', response.status, errorBody.errors ?? {});
   }
 
   return response.json() as Promise<T>;
@@ -54,10 +95,24 @@ function ProtectedRoute({ allowedRole, children }: { allowedRole?: User['role'];
 function LoginPage({ onLogin }: { onLogin: (payload: AuthResponse) => void }) {
   const [email, setEmail] = useState('admin@sigva.test');
   const [password, setPassword] = useState('Admin123!');
-  const [error, setError] = useState('');
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [message, setMessage] = useState('');
+
+  function updateField(field: 'email' | 'password', value: string) {
+    if (field === 'email') setEmail(value);
+    else setPassword(value);
+    setErrors((current) => {
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+    setMessage('');
+  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    setErrors({});
+    setMessage('');
     try {
       const payload = await apiRequest<AuthResponse>('/api/auth/login', {
         method: 'POST',
@@ -65,7 +120,12 @@ function LoginPage({ onLogin }: { onLogin: (payload: AuthResponse) => void }) {
       });
       onLogin(payload);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error de autenticación');
+      if (err instanceof ApiError) {
+        setErrors(err.fields);
+        setMessage(err.message);
+      } else {
+        setMessage(err instanceof Error ? err.message : 'Error de autenticación');
+      }
     }
   }
 
@@ -76,16 +136,479 @@ function LoginPage({ onLogin }: { onLogin: (payload: AuthResponse) => void }) {
       <form onSubmit={handleSubmit} className="stack">
         <label>
           Email
-          <input value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input value={email} onChange={(e) => updateField('email', e.target.value)} aria-invalid={Boolean(errors.email)} />
+          {errors.email && <span className="field-error" role="alert">{errors.email}</span>}
         </label>
         <label>
           Contraseña
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <input type="password" value={password} onChange={(e) => updateField('password', e.target.value)} aria-invalid={Boolean(errors.password)} />
+          {errors.password && <span className="field-error" role="alert">{errors.password}</span>}
         </label>
-        {error && <div className="error-box">{error}</div>}
+        {message && Object.keys(errors).length === 0 && <div className="error-box" role="alert">{message}</div>}
         <button type="submit">Ingresar</button>
       </form>
+      <p>
+        <Link to="/registro">Crear cuenta de pasajero</Link>
+      </p>
     </div>
+  );
+}
+
+function RegisterPage() {
+  const navigate = useNavigate();
+  const [form, setForm] = useState({ name: '', lastName: '', document: '', email: '', password: '', birthDate: '' });
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [message, setMessage] = useState('');
+
+  function updateField(field: keyof typeof form, value: string) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setErrors((current) => {
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+    setMessage('');
+  }
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setErrors({});
+    setMessage('');
+    try {
+      await apiRequest('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(form)
+      });
+      navigate('/login');
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setErrors(error.fields);
+        setMessage(error.message);
+      } else if (error instanceof Error) {
+        setMessage(error.message);
+      }
+    }
+  }
+
+  return (
+    <div className="auth-card">
+      <h1>Registro de pasajero</h1>
+      <form onSubmit={handleSubmit} className="stack">
+        <label>Nombre<input value={form.name} onChange={(e) => updateField('name', e.target.value)} aria-invalid={Boolean(errors.name)} />{errors.name && <span className="field-error" role="alert">{errors.name}</span>}</label>
+        <label>Apellido<input value={form.lastName} onChange={(e) => updateField('lastName', e.target.value)} aria-invalid={Boolean(errors.lastName)} />{errors.lastName && <span className="field-error" role="alert">{errors.lastName}</span>}</label>
+        <label>Documento<input value={form.document} onChange={(e) => updateField('document', e.target.value)} aria-invalid={Boolean(errors.document)} /><span className="field-hint">6 a 15 caracteres alfanuméricos</span>{errors.document && <span className="field-error" role="alert">{errors.document}</span>}</label>
+        <label>Email<input type="email" value={form.email} onChange={(e) => updateField('email', e.target.value)} aria-invalid={Boolean(errors.email)} />{errors.email && <span className="field-error" role="alert">{errors.email}</span>}</label>
+        <label>Contraseña<input type="password" value={form.password} onChange={(e) => updateField('password', e.target.value)} aria-invalid={Boolean(errors.password)} /><span className="field-hint">Mínimo 8 caracteres, con al menos una letra y un número</span>{errors.password && <span className="field-error" role="alert">{errors.password}</span>}</label>
+        <label>Fecha de nacimiento (opcional)<input type="date" value={form.birthDate} onChange={(e) => updateField('birthDate', e.target.value)} aria-invalid={Boolean(errors.birthDate)} />{errors.birthDate && <span className="field-error" role="alert">{errors.birthDate}</span>}</label>
+        {message && Object.keys(errors).length === 0 && <div className="error-box" role="alert">{message}</div>}
+        <button type="submit">Registrarme</button>
+      </form>
+    </div>
+  );
+}
+
+function SearchFlightsPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [airports, setAirports] = useState<Array<{ iata: string; name: string }>>([]);
+  const [origin, setOrigin] = useState('AEP');
+  const [destination, setDestination] = useState('EZE');
+  const [date, setDate] = useState('2026-11-05');
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [message, setMessage] = useState(() => (location.state as { message?: string } | null)?.message ?? '');
+  const [selectedFlight, setSelectedFlight] = useState<SearchResult | null>(null);
+  const [classCode, setClassCode] = useState('ECONOMY');
+  const [quantity, setQuantity] = useState('1');
+  const [quoteErrors, setQuoteErrors] = useState<FieldErrors>({});
+  const [quoteMessage, setQuoteMessage] = useState('');
+  const [quoteStatus, setQuoteStatus] = useState<number | null>(null);
+  const [quoteTotal, setQuoteTotal] = useState<number | null>(null);
+
+  useEffect(() => {
+    void apiRequest<{ airports: Array<{ iata: string; name: string }> }>('/api/public/airports')
+      .then((data) => setAirports(data.airports))
+      .catch(() => setAirports([]));
+  }, []);
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setErrors({});
+    setMessage('');
+    try {
+      const data = await apiRequest<{ results?: SearchResult[]; message?: string }>('/api/search/flights?origin=' + encodeURIComponent(origin) + '&destination=' + encodeURIComponent(destination) + '&date=' + encodeURIComponent(date));
+      if ((data.results ?? []).length === 0) {
+        setResults([]);
+        setSelectedFlight(null);
+        setMessage(data.message ?? 'No se encontraron vuelos para la búsqueda.');
+        return;
+      }
+      setResults(data.results ?? []);
+      setSelectedFlight(null);
+    } catch (error) {
+      const apiError = error instanceof ApiError ? error : null;
+      setErrors(apiError?.fields ?? {});
+      setMessage(error instanceof Error ? error.message : 'No se pudo realizar la búsqueda');
+      setResults([]);
+    }
+  }
+
+  function selectFlight(result: SearchResult) {
+    const user = JSON.parse(localStorage.getItem('sigva-user') || 'null') as User | null;
+    if (!localStorage.getItem('sigva-token') || user?.role !== 'passenger') {
+      navigate('/login', { state: { fromSearch: true, departureId: result.id } });
+      return;
+    }
+    setSelectedFlight(result);
+    setClassCode(result.classes.find((item) => !item.soldOut)?.code ?? 'ECONOMY');
+    setQuantity('1');
+    setQuoteErrors({});
+    setQuoteMessage('');
+    setQuoteStatus(null);
+    setQuoteTotal(null);
+  }
+
+  async function requestQuote(event: React.FormEvent) {
+    event.preventDefault();
+    if (!selectedFlight) return;
+    setQuoteErrors({});
+    setQuoteMessage('');
+    setQuoteStatus(null);
+    setQuoteTotal(null);
+    try {
+      const quote = await apiRequest<{ total: number }>('/api/purchases/quote', {
+        method: 'POST',
+        body: JSON.stringify({ departureId: selectedFlight.id, classCode, quantity: Number(quantity) })
+      });
+      setQuoteTotal(quote.total);
+      const selectedClass = selectedFlight.classes.find((item) => item.code === classCode);
+      if (selectedClass) {
+        navigate('/compra/datos', {
+          state: {
+            selection: {
+              departure: selectedFlight,
+              classCode,
+              className: selectedClass.name,
+              quantity: Number(quantity),
+              total: quote.total
+            } satisfies PurchaseSelection
+          }
+        });
+      }
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setQuoteErrors(error.fields);
+        setQuoteMessage(error.message);
+        setQuoteStatus(error.status);
+        if (error.status === 409) {
+          setQuoteTotal(null);
+        }
+      } else {
+        setQuoteMessage(error instanceof Error ? error.message : 'No se pudo cotizar la selección.');
+      }
+    }
+  }
+
+  return (
+    <div className="panel">
+      <h2>Búsqueda de vuelos</h2>
+      <form onSubmit={handleSubmit} className="stack">
+        <div className="row">
+          <label>Origen<select value={origin} onChange={(e) => { setOrigin(e.target.value); setErrors((current) => ({ ...current, origin: '' })); setMessage(''); }} aria-invalid={Boolean(errors.origin)}>{airports.map((airport) => <option key={airport.iata} value={airport.iata}>{airport.iata} - {airport.name}</option>)}</select>{errors.origin && <span className="field-error" role="alert">{errors.origin}</span>}</label>
+          <label>Destino<select value={destination} onChange={(e) => { setDestination(e.target.value); setErrors((current) => ({ ...current, destination: '' })); setMessage(''); }} aria-invalid={Boolean(errors.destination)}>{airports.map((airport) => <option key={airport.iata + '-dest'} value={airport.iata}>{airport.iata} - {airport.name}</option>)}</select>{errors.destination && <span className="field-error" role="alert">{errors.destination}</span>}</label>
+        </div>
+        <label>Fecha<input type="date" value={date} onChange={(e) => { setDate(e.target.value); setErrors((current) => ({ ...current, date: '' })); setMessage(''); }} aria-invalid={Boolean(errors.date)} />{errors.date && <span className="field-error" role="alert">{errors.date}</span>}</label>
+        <button type="submit">Buscar vuelos</button>
+      </form>
+      {message && <div className={Object.keys(errors).some((field) => errors[field]) ? 'error-box' : 'info-box'} role="alert">{message}</div>}
+      {results.length > 0 && (
+        <div className="stack">
+          {results.map((result) => (
+            <div key={result.id} className="panel">
+              <h3>{result.flightNumber}</h3>
+              <p>{result.origin} → {result.destination} · {result.departure.slice(0, 10)} · {result.duration}</p>
+              <p>Salida: {result.departure.slice(11, 16)} · Llegada: {result.arrival.slice(11, 16)}</p>
+              <ul>
+                {result.classes.map((cls) => (
+                  <li key={cls.code}>{cls.name}: ${cls.price} {cls.soldOut ? 'Agotada' : `(${cls.available} libres)`}</li>
+                ))}
+              </ul>
+              <button type="button" onClick={() => selectFlight(result)}>Seleccionar</button>
+              {selectedFlight?.id === result.id && (
+                <form className="stack selection-form" onSubmit={requestQuote}>
+                  <label>
+                    Clase
+                    <select
+                      value={classCode}
+                      onChange={(event) => {
+                        setClassCode(event.target.value);
+                        setQuoteErrors((current) => {
+                          const next = { ...current };
+                          delete next.classCode;
+                          return next;
+                        });
+                        setQuoteStatus(null);
+                        setQuoteMessage('');
+                      }}
+                      aria-invalid={Boolean(quoteErrors.classCode)}
+                    >
+                      {result.classes.filter((item) => !item.soldOut).map((item) => <option key={item.code} value={item.code}>{item.name} · ${item.price}</option>)}
+                    </select>
+                    {quoteErrors.classCode && <span className="field-error" role="alert">{quoteErrors.classCode}</span>}
+                  </label>
+                  <label>
+                    Cantidad
+                    <input
+                      type="number"
+                      min="1"
+                      max="9"
+                      value={quantity}
+                      onChange={(event) => {
+                        setQuantity(event.target.value);
+                        setQuoteErrors((current) => {
+                          const next = { ...current };
+                          delete next.quantity;
+                          return next;
+                        });
+                        setQuoteStatus(null);
+                        setQuoteMessage('');
+                      }}
+                      aria-invalid={Boolean(quoteErrors.quantity)}
+                    />
+                    {quoteErrors.quantity && <span className="field-error" role="alert">{quoteErrors.quantity}</span>}
+                  </label>
+                  {quoteMessage && <div className="error-box" role="alert">{quoteMessage}</div>}
+                  {quoteStatus === 409 && <button type="button" className="secondary-button" onClick={() => {
+                    setSelectedFlight(null);
+                    setResults([]);
+                    setMessage('La disponibilidad cambió. Buscá nuevamente para elegir otra opción.');
+                  }}>Volver a elegir vuelo</button>}
+                  {quoteTotal !== null && <div className="info-box" role="status">Total cotizado: ${quoteTotal}</div>}
+                  <button type="submit">Cotizar selección</button>
+                </form>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PassengerDataPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const selection = (location.state as { selection?: PurchaseSelection } | null)?.selection;
+  const [passengers, setPassengers] = useState<PassengerForm[]>([]);
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [message, setMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!selection) return;
+    setPassengers(Array.from({ length: selection.quantity }, () => ({
+      firstName: '',
+      lastName: '',
+      document: '',
+      birthDate: ''
+    })));
+
+    void apiRequest<{ user: PassengerForm }>('/api/auth/me')
+      .then(({ user }) => {
+        setPassengers((current) => current.map((passenger, index) => index === 0 ? {
+          firstName: user.firstName ?? '',
+          lastName: user.lastName ?? '',
+          document: user.document ?? '',
+          birthDate: user.birthDate ?? ''
+        } : passenger));
+      })
+      .catch((error: unknown) => {
+        setMessage(error instanceof Error ? error.message : 'No se pudieron cargar los datos del titular.');
+      });
+  }, [selection]);
+
+  if (!selection) return <Navigate to="/buscar" replace />;
+  const currentSelection = selection;
+
+  function updatePassenger(index: number, field: keyof PassengerForm, value: string) {
+    setPassengers((current) => current.map((passenger, passengerIndex) =>
+      passengerIndex === index ? { ...passenger, [field]: value } : passenger
+    ));
+    setErrors((current) => {
+      const next = { ...current };
+      delete next[`passengers.${index}.${field}`];
+      delete next.passengers;
+      return next;
+    });
+    setMessage('');
+  }
+
+  function validatePassengers() {
+    const nextErrors: FieldErrors = {};
+    const documents = new Set<string>();
+    const today = new Date();
+    const oldest = new Date();
+    oldest.setFullYear(oldest.getFullYear() - 120);
+
+    passengers.forEach((passenger, index) => {
+      if (!passenger.firstName.trim()) nextErrors[`passengers.${index}.firstName`] = 'El nombre es obligatorio.';
+      if (!passenger.lastName.trim()) nextErrors[`passengers.${index}.lastName`] = 'El apellido es obligatorio.';
+      if (!/^[A-Za-z0-9]{6,15}$/.test(passenger.document.trim())) {
+        nextErrors[`passengers.${index}.document`] = 'El documento debe tener entre 6 y 15 caracteres alfanuméricos.';
+      } else if (documents.has(passenger.document.trim())) {
+        nextErrors[`passengers.${index}.document`] = 'El documento no puede repetirse dentro de la compra.';
+      }
+      if (!passenger.birthDate) {
+        nextErrors[`passengers.${index}.birthDate`] = 'La fecha de nacimiento es obligatoria.';
+      } else {
+        const birth = new Date(`${passenger.birthDate}T00:00:00`);
+        if (Number.isNaN(birth.getTime()) || birth.toISOString().slice(0, 10) !== passenger.birthDate) {
+          nextErrors[`passengers.${index}.birthDate`] = 'La fecha de nacimiento debe ser válida.';
+        } else if (birth > today) {
+          nextErrors[`passengers.${index}.birthDate`] = 'La fecha de nacimiento no puede ser futura.';
+        } else if (birth < oldest) {
+          nextErrors[`passengers.${index}.birthDate`] = 'La fecha no puede ser anterior a 120 años.';
+        }
+      }
+      if (passenger.document.trim()) documents.add(passenger.document.trim());
+    });
+
+    setErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setMessage('');
+    if (!validatePassengers()) return;
+    setSubmitting(true);
+    try {
+      const reservation = await apiRequest<Reservation>('/api/purchases', {
+        method: 'POST',
+        body: JSON.stringify({
+          departureId: currentSelection.departure.id,
+          classCode: currentSelection.classCode,
+          quantity: currentSelection.quantity,
+          passengers
+        })
+      });
+      navigate(`/reservas/${reservation.id}`, {
+        state: { reservation, selection: currentSelection }
+      });
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setErrors(error.fields);
+        setMessage(error.message);
+      } else {
+        setMessage(error instanceof Error ? error.message : 'No se pudo crear la reserva.');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function fieldError(index: number, field: keyof PassengerForm) {
+    const error = errors[`passengers.${index}.${field}`];
+    return error ? <span className="field-error" role="alert">{error}</span> : null;
+  }
+
+  return (
+    <section className="panel">
+      <h1>Datos de pasajeros</h1>
+      <p>{currentSelection.departure.flightNumber} · {currentSelection.departure.origin} → {currentSelection.departure.destination} · {currentSelection.className} · {currentSelection.quantity} pasajero(s) · Total: ${currentSelection.total}</p>
+      <form className="stack" onSubmit={submit}>
+        {passengers.map((passenger, index) => (
+          <fieldset className="passenger-card stack" key={index}>
+            <legend>Pasajero {index + 1}{index === 0 ? ' (titular)' : ''}</legend>
+            <div className="row">
+              <label>Nombre
+                <input value={passenger.firstName} onChange={(event) => updatePassenger(index, 'firstName', event.target.value)} aria-invalid={Boolean(errors[`passengers.${index}.firstName`])} />
+                {fieldError(index, 'firstName')}
+              </label>
+              <label>Apellido
+                <input value={passenger.lastName} onChange={(event) => updatePassenger(index, 'lastName', event.target.value)} aria-invalid={Boolean(errors[`passengers.${index}.lastName`])} />
+                {fieldError(index, 'lastName')}
+              </label>
+            </div>
+            <div className="row">
+              <label>Documento
+                <input value={passenger.document} onChange={(event) => updatePassenger(index, 'document', event.target.value)} aria-invalid={Boolean(errors[`passengers.${index}.document`])} />
+                <span className="field-hint">6 a 15 caracteres alfanuméricos</span>
+                {fieldError(index, 'document')}
+              </label>
+              <label>Fecha de nacimiento
+                <input type="date" value={passenger.birthDate} onChange={(event) => updatePassenger(index, 'birthDate', event.target.value)} aria-invalid={Boolean(errors[`passengers.${index}.birthDate`])} />
+                {fieldError(index, 'birthDate')}
+              </label>
+            </div>
+          </fieldset>
+        ))}
+        {errors.passengers && <span className="field-error" role="alert">{errors.passengers}</span>}
+        {message && <div className="error-box" role="alert">{message}</div>}
+        {message && <button type="button" className="secondary-button" onClick={() => navigate('/buscar')}>Reelegir vuelo</button>}
+        <div className="form-actions">
+          <button type="button" className="secondary-button" onClick={() => navigate('/buscar')}>Volver a la búsqueda</button>
+          <button type="submit" disabled={submitting}>{submitting ? 'Reservando…' : 'Confirmar datos y reservar'}</button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
+function ReservationPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { id } = useParams();
+  const state = location.state as { reservation?: Reservation; selection?: PurchaseSelection } | null;
+  const reservation = state?.reservation;
+  const selection = state?.selection;
+  const [secondsLeft, setSecondsLeft] = useState(() => reservation ? Math.max(0, Math.ceil((Date.parse(reservation.expiresAt) - Date.now()) / 1000)) : 0);
+  const [message, setMessage] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+
+  useEffect(() => {
+    if (!reservation) return;
+    const updateRemaining = () => setSecondsLeft(Math.max(0, Math.ceil((Date.parse(reservation.expiresAt) - Date.now()) / 1000)));
+    updateRemaining();
+    const timer = window.setInterval(updateRemaining, 1000);
+    return () => window.clearInterval(timer);
+  }, [reservation]);
+
+  useEffect(() => {
+    if (reservation && secondsLeft === 0) {
+      navigate('/buscar', { replace: true, state: { message: 'La reserva venció.' } });
+    }
+  }, [navigate, reservation, secondsLeft]);
+
+  if (!reservation) return <Navigate to="/buscar" replace />;
+
+  async function cancelReservation() {
+    setCancelling(true);
+    setMessage('');
+    try {
+      await apiRequest(`/api/purchases/${id}/cancel`, { method: 'POST' });
+      navigate('/buscar', { replace: true, state: { message: 'La reserva se canceló y los asientos quedaron disponibles.' } });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo cancelar la reserva.');
+      setCancelling(false);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <h1>Reserva temporal</h1>
+      {selection && <p>{selection.departure.flightNumber} · {selection.departure.origin} → {selection.departure.destination} · {selection.className} · {selection.quantity} pasajero(s) · Total: ${reservation.total}</p>}
+      <p>Reserva #{reservation.id}</p>
+      <p className="countdown" role="timer">Tiempo restante: {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, '0')}</p>
+      <p>Vence: {new Date(reservation.expiresAt).toLocaleString('es-AR')}</p>
+      {message && <div className="error-box" role="alert">{message}</div>}
+      <div className="form-actions">
+        <button type="button" className="danger-button" onClick={() => void cancelReservation()} disabled={cancelling || secondsLeft === 0}>
+          {cancelling ? 'Cancelando…' : 'Cancelar reserva'}
+        </button>
+        <button type="button" disabled title="Disponible en la Tanda D">Pagar</button>
+      </div>
+    </section>
   );
 }
 
@@ -262,15 +785,37 @@ function AppShell() {
                 <Link to="/airports">Aeropuertos</Link>
               </>
             )}
+            {user.role === 'passenger' && <Link to="/buscar">Buscar vuelos</Link>}
             <button type="button" className="logout" onClick={handleLogout}>Cerrar sesión</button>
           </>
         ) : (
-          <Link to="/login">Login</Link>
+          <>
+            <Link to="/login">Login</Link>
+            <Link to="/buscar">Buscar vuelos</Link>
+          </>
         )}
       </nav>
       <main className="content">
         <Routes>
           <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginPage onLogin={handleLogin} />} />
+          <Route path="/registro" element={user ? <Navigate to="/" replace /> : <RegisterPage />} />
+          <Route path="/buscar" element={<SearchFlightsPage />} />
+          <Route
+            path="/compra/datos"
+            element={
+              <ProtectedRoute allowedRole="passenger">
+                <PassengerDataPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/reservas/:id"
+            element={
+              <ProtectedRoute allowedRole="passenger">
+                <ReservationPage />
+              </ProtectedRoute>
+            }
+          />
           <Route path="/forbidden" element={<ForbiddenPage />} />
           <Route
             path="/"

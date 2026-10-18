@@ -352,6 +352,7 @@ export class IdModel extends Model<InferAttributes<IdModel>, InferCreationAttrib
   declare lastName?: string;
   declare documentType?: string;
   declare documentNumber?: string;
+  declare birthDate?: string | null;
   declare email?: string;
   declare code?: string;
   declare name?: string;
@@ -379,6 +380,12 @@ export class PurchaseModel extends Model<InferAttributes<PurchaseModel>, InferCr
   declare passengerId: number;
   declare status: string;
   declare total: number;
+  declare departureId?: number | null;
+  declare classId?: number | null;
+  declare quantity?: number;
+  declare expiresAt?: Date | null;
+  declare releaseReason?: string | null;
+  declare passengerData?: string | null;
 }
 
 export const Passenger = sequelize.define<IdModel>('Passenger', {
@@ -388,6 +395,7 @@ export const Passenger = sequelize.define<IdModel>('Passenger', {
   lastName: { type: DataTypes.STRING, allowNull: false },
   documentType: { type: DataTypes.STRING, allowNull: false },
   documentNumber: { type: DataTypes.STRING, allowNull: false, unique: true },
+  birthDate: { type: DataTypes.DATEONLY, allowNull: true },
   email: { type: DataTypes.STRING, allowNull: false }
 }, { tableName: 'passengers' });
 
@@ -414,7 +422,13 @@ export const Purchase = sequelize.define<PurchaseModel>('Purchase', {
     defaultValue: 'RESERVED',
     validate: { isIn: [['RESERVED', 'CONFIRMED', 'EXPIRED', 'REJECTED']] }
   },
-  total: { type: DataTypes.DECIMAL(10, 2), allowNull: false, defaultValue: 0 }
+  total: { type: DataTypes.DECIMAL(10, 2), allowNull: false, defaultValue: 0 },
+  departureId: { type: DataTypes.INTEGER, allowNull: true, references: { model: Departure, key: 'id' } },
+  classId: { type: DataTypes.INTEGER, allowNull: true },
+  quantity: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+  expiresAt: { type: DataTypes.DATE, allowNull: true },
+  releaseReason: { type: DataTypes.STRING, allowNull: true },
+  passengerData: { type: DataTypes.TEXT, allowNull: true }
 }, { tableName: 'purchases' });
 
 export const Ticket = sequelize.define<IdModel>('Ticket', {

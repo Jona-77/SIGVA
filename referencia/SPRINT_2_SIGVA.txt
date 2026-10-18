@@ -1,0 +1,293 @@
+SPRINT #2 — SIGVA (extracto del informe del Sprint #1, sección Planificación Sprint 2)
+
+Ajustes al alcance (Sprint #1 -> Sprint #2):
+- El pipeline de integración continua (CI) queda fuera: no hay que configurarlo ni es criterio de terminado.
+- El diagrama entidad-relación no fue exigido en el Sprint #1; en el Sprint #2 la documentación del modelo de datos debe incluir las nuevas entidades (DoD 8).
+- El testing del Sprint #1 pasa al Sprint #2 como User Story técnica, de tamaño moderado, sin buscar cobertura exhaustiva.
+
+Objetivo tentativo del sprint: al finalizar el Sprint #2, un pasajero puede crear su cuenta, buscar vuelos,
+    seleccionar una salida y clase, cargar los datos de los pasajeros, reservar temporalmente los asientos y pagar la
+    compra, quedando esta registrada en el sistema.
+
+    2. Dependencias de las User Stories del Sprint 2
+
+                                           Depende
+       User Story                                          Motivo
+                                           de
+
+       US-04 — Registro de                 US-01, US-      Requiere la infraestructura base y el modelo de datos de
+       pasajeros                           02              usuarios
+
+                                           US-01, US-      Requiere el modelo de datos de vuelos/salidas; opera sobre
+       US-11 — Búsqueda de vuelos
+                                           02              los vuelos ya cargados en el Sprint #1
+
+       US-13 — Selección de vuelo,         US-11, US-      Se selecciona sobre los resultados de la búsqueda; la
+       clase y cantidad                    03              compra requiere al pasajero autenticado
+
+       US-14 — Carga de datos de           US-13, US-      Se cargan los pasajeros de la selección ya hecha; el titular
+       los pasajeros                       04              debe existir como cuenta registrada
+
+       US-15 — Reserva temporal de                         La reserva se genera una vez cargados los datos de los
+                                           US-14
+       asientos                                            pasajeros a reservar
+
+       US-17 — Pago y registro de la
+                                           US-15           El pago confirma una reserva temporal existente
+       transacción
+
+    El testing de las funcionalidades del Sprint #1 (trasladado) depende de US-03, US-06, US-07, US-08, US-09 y US-
+    10, ya implementadas, y la corrección de US-08 depende de la modificación de vuelos ya implementada; ninguna
+    depende de las User Stories del Sprint #2. Por eso se realizan primero y deben finalizar antes de iniciar el
+    desarrollo de US-04 y siguientes.
+
+    3. Sprint Backlog
+
+    Testing de las funcionalidades del Sprint #1 (User Story técnica, trasladada del
+    Sprint #1; se realiza primero)
+
+                  Como: Miembro del equipo de desarrollo
+                  Quiero: Contar con pruebas automatizadas de las funcionalidades entregadas en el Sprint #1
+                  De forma que: Se verifique de manera repetible que se cumplen los criterios de aceptación de US-
+                  03, US-06, US-07, US-08, US-09 y US-10, y se detecten regresiones al construir el Sprint #2 sobre
+                  ellas
+
+
+    Esta User Story reúne las tareas de testing que estaban previstas en el Sprint #1 y que no se realizaron (ver
+    Ajustes al alcance del Sprint #1 en la retrospectiva). Se ejecuta al inicio del sprint y debe quedar terminada
+    antes de comenzar con las User Stories de funcionalidad nuevas (US-04 en adelante), de modo que el Sprint
+    #2 se construya sobre funcionalidades ya verificadas. Se mantiene el alcance acotado: pruebas de tamaño
+    moderado que cubran los casos principales de cada criterio, sin buscar una cobertura exhaustiva.
+
+    Tareas:
+
+              Testear los flujos de autenticación y autorización (US-03): inicio de sesión correcto e incorrecto, acceso
+              permitido y acceso denegado por rol
+              Testear la gestión de aeropuertos (US-06): alta válida, IATA repetido o inválido, y desactivación bloqueada
+              por vuelo activo
+              Testear el flujo de creación de vuelos (US-07): caso válido con generación de salidas y casos de error de
+              validación
+              Testear el flujo de modificación de vuelos (US-08): rechazo por capacidad, advertencia por salidas con
+              ventas e historial de cambios
+              Testear el flujo de cancelación (US-09): vuelo completo y salida puntual, con y sin pasajes vendidos
+              Testear el listado, los filtros y el tiempo de respuesta con volumen de datos de prueba (US-10)
+
+    Total
+
+    Criterios de aceptación:
+
+          1. Existe al menos una prueba automatizada por cada tarea de testing listada, y todas se ejecutan con un
+              único comando.
+          2. Las pruebas de US-03 cubren como mínimo: inicio de sesión correcto, inicio de sesión incorrecto, acceso
+              permitido y acceso denegado por rol (criterio 6 de US-03).
+          3. Las pruebas de US-06 a US-10 cubren, para cada User Story, el caso exitoso y al menos un caso de error
+              de sus criterios de aceptación.
+          4. Todas las pruebas finalizan exitosamente sobre los datos de prueba del proyecto.
+
+    Corrección de US-08: indicar la salida en conflicto al reducir la capacidad (User
+    Story técnica, trasladada del Sprint #1; se realiza primero)
+
+                  Como: Administrador de la aerolínea
+                  Quiero: Que, al intentar reducir la capacidad de una clase por debajo de los pasajes ya vendidos, el
+                  sistema me indique en qué salidas está el conflicto
+                  De forma que: Pueda entender por qué se rechaza el cambio y cuál es la capacidad mínima que
+                  puedo establecer
+
+    Esta User Story completa el criterio de aceptación 4 de US-08, que quedó implementado solo en parte en el Sprint
+    #1: el servidor rechaza el cambio (código 400) y envía la lista de salidas en conflicto con su fecha, la clase, los
+    pasajes vendidos y la capacidad solicitada, pero la pantalla de modificación de vuelos (FlightEdit) solo muestra
+    el mensaje genérico "La capacidad no puede ser menor que los pasajes vendidos" y descarta esa lista. Se realiza
+    junto con el testing del Sprint #1, antes de iniciar las demás User Stories del sprint.
+
+    Tareas:
+
+              Mostrar en la pantalla de modificación de vuelos cada salida en conflicto (fecha, clase, pasajes vendidos y
+              capacidad solicitada), cubriendo Economy y Primera y todas las salidas afectadas
+
+    Total
+
+
+    Criterios de aceptación:
+
+          1. Al intentar guardar una capacidad menor que los pasajes vendidos en alguna salida futura, el cambio no se
+              guarda y la pantalla muestra cada salida en conflicto con su fecha, la clase, los pasajes vendidos y la
+              capacidad solicitada. Por ejemplo, con los datos de prueba: al poner 2 asientos Economy en el vuelo
+              AR1450, se informa la salida con 5 pasajes Economy vendidos.
+          2. El mensaje cubre los conflictos de Economy y de Primera, y todas las salidas afectadas cuando hay más de
+              una.
+
+    Registro de pasajeros (US-04)
+
+                  Como: Pasajero
+                  Quiero: Crear una cuenta en la plataforma con mis datos personales y un email de contacto
+                  De forma que: Pueda comprar pasajes y recibir en mi email la documentación y las novedades de
+                  mis vuelos
+
+    Tareas:
+
+              Implementar el servicio de alta de cuenta de pasajero con validación de datos personales y email
+              Implementar la pantalla de registro en la interfaz web
+              Testear el registro (casos válidos y errores de validación)
+
+    Total
+
+    Criterios de aceptación:
+
+          1. Un visitante puede crear una cuenta indicando nombre, apellido, documento, email y contraseña.
+          2. El sistema rechaza un email ya registrado o con formato inválido, y una contraseña que no cumpla el
+              mínimo de seguridad (definido por el equipo desarrollador).
+          3. Al registrarse, la cuenta queda disponible de inmediato para iniciar sesión (US-03).
+          4. Los datos cargados en el registro quedan disponibles para precargarse como titular en una futura compra
+              (US-14).
+
+    Búsqueda de vuelos (US-11)
+
+                  Como: Pasajero
+                  Quiero: Buscar vuelos indicando aeropuerto de origen, destino y fecha de viaje
+                  De forma que: El sistema me muestre las opciones disponibles según fechas y horarios para
+                  planificar mi viaje
+
+    Tareas:
+
+              Implementar el servicio de búsqueda de salidas disponibles por origen, destino y fecha
+              Implementar el cálculo de disponibilidad de asientos por clase para cada salida resultante
+              Implementar la pantalla de búsqueda y el listado de resultados en la interfaz del pasajero
+              Testear la búsqueda (casos con y sin resultados, fechas límite del período de disponibilidad)
+
+    Total
+
+    Criterios de aceptación:
+
+          1. El pasajero puede buscar sin necesidad de iniciar sesión, indicando origen, destino y fecha.
+
+
+          2. El resultado muestra únicamente salidas activas, dentro del período de disponibilidad del vuelo, con
+              asientos libres en al menos una clase.
+          3. Cada resultado muestra horario de partida y llegada (con "+1" si corresponde), duración, clases disponibles
+              y precio.
+          4. Si no hay salidas para la búsqueda, se informa claramente al pasajero sin mostrar un error.
+
+    Selección de vuelo, clase y cantidad de pasajes (US-13)
+
+                  Como: Pasajero
+                  Quiero: Seleccionar una salida de los resultados, la clase (Economy o Primera) y la cantidad de
+                  pasajes, hasta un máximo de 9 por transacción
+                  De forma que: Pueda armar mi compra conociendo el precio total antes de pagar
+
+    Tareas:
+
+              Implementar la selección de salida, clase y cantidad de pasajes (hasta 9) con cálculo del precio total
+              Implementar la pantalla de selección sobre los resultados de búsqueda
+              Testear la selección (límite de 9 pasajes y cálculo de precio)
+
+    Total
+
+    Criterios de aceptación:
+
+          1. El pasajero debe tener sesión iniciada para avanzar desde la selección.
+          2. No se permite seleccionar una cantidad mayor a la disponible en la salida ni mayor a 9 pasajes.
+          3. El sistema muestra el precio total (precio por clase × cantidad) antes de continuar.
+          4. La selección avanza al paso de carga de datos de pasajeros (US-14) conservando salida, clase y cantidad
+              elegidas.
+
+    Carga de datos de los pasajeros (US-14)
+
+                  Como: Pasajero
+                  Quiero: Ingresar los datos personales de cada pasajero incluido en la compra
+                  De forma que: Cada pasaje electrónico se emita a nombre de la persona que viaja
+
+    Tareas:
+
+              Implementar el servicio de carga de datos personales de cada pasajero incluido en la compra
+              Implementar la pantalla de carga de datos de pasajeros, con precarga de los datos del titular
+              Testear la carga de datos (validaciones y compras con múltiples pasajeros)
+
+    Total
+
+    Criterios de aceptación:
+
+          1. Se solicitan los datos de cada pasajero según la cantidad seleccionada en US-13 (nombre, apellido,
+              documento y fecha de nacimiento).
+          2. Los datos de la cuenta del titular (US-04) se precargan automáticamente para uno de los pasajeros.
+          3. El sistema valida que todos los campos obligatorios de cada pasajero estén completos y con formato
+              correcto antes de continuar.
+          4. Al confirmar, los datos quedan asociados a la selección y se avanza a la reserva temporal (US-15).
+
+
+    Reserva temporal de asientos (US-15)
+
+                  Como: Pasajero
+                  Quiero: Que los asientos que seleccioné queden reservados durante un tiempo limitado mientras
+                  completo la compra
+                  De forma que: No pierda mi lugar y nunca se vendan más pasajes que la capacidad del avión, aun
+                  con compras simultáneas
+
+    Tareas:
+
+              Diseñar el mecanismo de control de concurrencia para evitar sobreventa en reservas simultáneas
+              Implementar el servicio de reserva temporal con expiración automática de asientos
+              Implementar la liberación de asientos al vencer la reserva o al cancelar la compra
+              Testear la reserva bajo compras simultáneas y el vencimiento del tiempo límite
+
+    Total
+
+    Criterios de aceptación:
+
+          1. Al confirmar los datos de los pasajeros, los asientos seleccionados quedan reservados por un tiempo límite
+              definido (p. ej. 10 minutos).
+          2. Mientras dura la reserva, esos asientos no están disponibles para otras búsquedas o compras.
+          3. Si el pasajero no completa el pago (US-17) antes de que venza el tiempo, los asientos se liberan
+              automáticamente.
+          4. Ante compras simultáneas sobre los mismos asientos, el sistema nunca reserva ni vende más asientos que
+              la capacidad disponible de la salida.
+
+    Pago y registro de la transacción (US-17)
+
+                  Como: Pasajero
+                  Quiero: Ingresar la información de pago de mi compra a través de un medio seguro
+                  De forma que: La transacción quede registrada y mis pasajes queden emitidos
+
+    Tareas:
+
+              Integrar la pasarela de pagos externa en modo sandbox
+              Implementar el servicio de registro de la transacción y emisión de los pasajes al confirmarse el pago
+              Implementar la pantalla de pago en la interfaz del pasajero
+              Testear el flujo de pago aprobado y su integración con la reserva temporal
+
+    Total
+
+    Criterios de aceptación:
+
+          1. El pasajero ingresa los datos de pago a través de la pasarela externa en modo sandbox; el sistema no
+              almacena los datos completos de la tarjeta.
+          2. Si el pago es aprobado dentro del tiempo de la reserva temporal (US-15), la compra queda confirmada y los
+              asientos pasan de reservados a vendidos.
+          3. Al confirmarse el pago, la transacción queda registrada con fecha, hora, pasajero, salida, clase, cantidad y
+              monto.
+          4. Los pasajes quedan emitidos y asociados a la compra confirmada.
+
+
+    4. Definición de Terminado (Definition of Done) del Sprint 2
+    Una User Story del Sprint #2 se considera terminada cuando:
+
+           1. Todas sus tareas están completas y su código está integrado en la rama principal mediante un pull request
+              revisado por otro integrante.
+           2. El proyecto compila y las pruebas automatizadas de la User Story finalizan exitosamente al ejecutarse de
+              forma local (el pipeline de integración continua se posterga; ver Ajustes al alcance del Sprint #1).
+           3. La comisión de Análisis y Management verificó que se cumplen todos sus criterios de aceptación.
+           4. El flujo de compra (búsqueda → selección → carga de datos → reserva → pago) funciona de punta a punta
+              sobre el entorno de demostración, sin pasos simulados.
+           5. El mecanismo de reserva temporal fue probado bajo compras simultáneas sin generar sobreventa de
+              asientos.
+           6. La integración con la pasarela de pagos en modo sandbox procesa correctamente el caso de pago
+              aprobado.
+           7. El incremento está desplegado en el entorno de demostración y puede mostrarse en la demo de cierre del
+              Sprint #2.
+           8. La documentación asociada (descripción del modelo de datos actualizada con las nuevas entidades,
+              decisiones técnicas) está actualizada.
+           9. Las pruebas automatizadas de las funcionalidades del Sprint #1 (User Story técnica de testing trasladada)
+              están completas y finalizan exitosamente, y se terminaron antes de iniciar el desarrollo de las demás User
+              Stories del sprint.
+        10. La pantalla de modificación de vuelos indica las salidas en conflicto al reducir la capacidad por debajo de los
+              pasajes vendidos (criterio 4 de US-08).
+
