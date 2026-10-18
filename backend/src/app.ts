@@ -2,9 +2,9 @@ import cors from 'cors';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { Op } from 'sequelize';
+import { Op, Transaction } from 'sequelize';
 import { randomUUID } from 'node:crypto';
-import { Airport, Class, Departure, Flight, Passenger, Role, Session, User, ensureExampleFlightDepartures, ensureStateConstraints, sequelize, seedDatabase } from './db/index.js';
+import { Airport, Class, Departure, Flight, Passenger, Purchase, Role, Session, Ticket, User, ensureExampleFlightDepartures, ensureStateConstraints, sequelize, seedDatabase } from './db/index.js';
 import { config } from './config.js';
 import { requireAuth, requireRole } from './auth.js';
 import { flightsRouter } from './flights.js';
@@ -193,11 +193,78 @@ function hasDepartureTimePassed(date: string, departureTime: string) {
   return date < today || (date === today && departureTime <= timeNow);
 }
 
-function getAvailability(flight: { economySeats: number; firstClassSeats: number }, departure: { soldEconomy: number; soldFirstClass: number }) {
+async function getAvailability(
+  flight: { economySeats: number; firstClassSeats: number },
+  departure: { id: number; soldEconomy: number; soldFirstClass: number },
+  transaction?: Transaction
+) {
+  const activeReservations = await Purchase.findAll({
+    where: {
+      departureId: departure.id,
+      status: 'RESERVED',
+      expiresAt: { [Op.gt]: new Date() }
+    },
+    attributes: ['classId', 'quantity'],
+    transaction
+  });
+  const classCodes = await Class.findAll({ attributes: ['id', 'code'], transaction });
+  const codesById = new Map(classCodes.map((item) => [item.id, item.code]));
+  const reserved = activeReservations.reduce((totals, purchase) => {
+    const classCode = codesById.get(Number(purchase.classId));
+    if (classCode === 'ECONOMY' || classCode === 'FIRST') {
+      totals[classCode] += Number(purchase.quantity);
+    }
+    return totals;
+  }, { ECONOMY: 0, FIRST: 0 });
+
   return {
-    ECONOMY: Math.max(0, Number(flight.economySeats) - Number(departure.soldEconomy)),
-    FIRST: Math.max(0, Number(flight.firstClassSeats) - Number(departure.soldFirstClass))
+    ECONOMY: Math.max(0, Number(flight.economySeats) - Number(departure.soldEconomy) - reserved.ECONOMY),
+    FIRST: Math.max(0, Number(flight.firstClassSeats) - Number(departure.soldFirstClass) - reserved.FIRST)
   };
+}
+
+async function releaseReservation(purchaseId: number, reason: 'EXPIRADA' | 'CANCELADA_POR_USUARIO' | 'PAGO_RECHAZADO', providedTransaction?: Transaction) {
+  const transaction = providedTransaction ?? await sequelize.transaction({ type: Transaction.TYPES.IMMEDIATE });
+  const purchase = await Purchase.findByPk(purchaseId, { transaction });
+  if (!purchase || purchase.status !== 'RESERVED') {
+    if (!providedTransaction) await transaction.commit();
+    return false;
+  }
+
+  purchase.status = 'EXPIRED';
+  purchase.releaseReason = reason;
+  await purchase.save({ transaction });
+
+  if (!providedTransaction) await transaction.commit();
+  return true;
+}
+
+async function expireReservations() {
+  const now = new Date();
+  const expiredPurchases = await Purchase.findAll({
+    where: { status: 'RESERVED', expiresAt: { [Op.lte]: now } },
+    attributes: ['id']
+  });
+
+  for (const purchase of expiredPurchases) {
+    await releaseReservation(purchase.id, 'EXPIRADA');
+  }
+}
+
+const departureLocks = new Map<number, Promise<void>>();
+
+async function withDepartureLock<T>(departureId: number, operation: () => Promise<T>): Promise<T> {
+  const previous = departureLocks.get(departureId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  departureLocks.set(departureId, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (departureLocks.get(departureId) === current) departureLocks.delete(departureId);
+  }
 }
 
 app.get('/api/public/airports', asyncHandler(async (_req, res) => {
@@ -206,6 +273,8 @@ app.get('/api/public/airports', asyncHandler(async (_req, res) => {
 }));
 
 app.get('/api/search/flights', asyncHandler(async (req, res) => {
+  await expireReservations();
+
   const errors: Record<string, string> = {};
   const origin = typeof req.query.origin === 'string' ? req.query.origin.trim().toUpperCase() : '';
   const destination = typeof req.query.destination === 'string' ? req.query.destination.trim().toUpperCase() : '';
@@ -255,12 +324,12 @@ app.get('/api/search/flights', asyncHandler(async (req, res) => {
     order: [['departureTime', 'ASC'], ['id', 'ASC']]
   });
 
-  const results = flights
+  const results = (await Promise.all(flights
     .filter((flight) => !hasDepartureTimePassed(date, flight.departureTime))
-    .map((flight) => {
+    .map(async (flight) => {
       const departure = flight.departures?.find((item) => item.date === date && item.status === 'SCHEDULED');
       if (!departure) return null;
-      const availability = getAvailability(flight, departure);
+      const availability = await getAvailability(flight, departure);
       if (availability.ECONOMY <= 0 && availability.FIRST <= 0) return null;
 
       const departureDate = new Date(`${date}T${flight.departureTime}:00`);
@@ -285,7 +354,7 @@ app.get('/api/search/flights', asyncHandler(async (req, res) => {
           { code: 'FIRST', name: 'Primera', price: Number(flight.firstClassPrice), available: availability.FIRST, soldOut: availability.FIRST === 0 }
         ]
       };
-    })
+    })))
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
   if (results.length === 0) {
@@ -295,7 +364,221 @@ app.get('/api/search/flights', asyncHandler(async (req, res) => {
   return res.json({ results });
 }));
 
+app.post('/api/purchases', requireAuth, requireRole('passenger'), asyncHandler(async (req, res) => {
+  await expireReservations();
+
+  const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+  const departureId = Number(body.departureId);
+  const classCode = typeof body.classCode === 'string' ? body.classCode.trim().toUpperCase() : '';
+  const quantity = Number(body.quantity);
+  const passengers = Array.isArray(body.passengers) ? body.passengers : [];
+  const errors: Record<string, string> = {};
+
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 9) {
+    errors.quantity = 'La cantidad debe ser un entero entre 1 y 9.';
+  }
+  if (!Number.isFinite(departureId) || departureId <= 0) {
+    errors.departureId = 'La salida es obligatoria.';
+  }
+  if (!['ECONOMY', 'FIRST'].includes(classCode)) {
+    errors.classCode = 'La clase debe ser ECONOMY o FIRST.';
+  }
+  if (passengers.length !== quantity) {
+    errors.passengers = 'La cantidad de pasajeros debe coincidir con la cantidad solicitada.';
+  }
+
+  const normalizedPassengers: Array<{ firstName: string; lastName: string; document: string; birthDate: string | null }> = [];
+  const seenDocuments = new Set<string>();
+
+  for (let index = 0; index < passengers.length; index += 1) {
+    const passenger = passengers[index] && typeof passengers[index] === 'object' ? passengers[index] as Record<string, unknown> : {};
+    const firstName = typeof passenger.firstName === 'string' ? passenger.firstName.trim() : '';
+    const lastName = typeof passenger.lastName === 'string' ? passenger.lastName.trim() : '';
+    const document = typeof passenger.document === 'string' ? passenger.document.trim() : '';
+    const birthDate = typeof passenger.birthDate === 'string' ? passenger.birthDate : null;
+
+    if (!firstName) errors[`passengers.${index}.firstName`] = 'El nombre es obligatorio.';
+    if (!lastName) errors[`passengers.${index}.lastName`] = 'El apellido es obligatorio.';
+    if (!document || !/^[A-Za-z0-9]{6,15}$/.test(document)) {
+      errors[`passengers.${index}.document`] = 'El documento debe tener entre 6 y 15 caracteres alfanuméricos.';
+    } else if (seenDocuments.has(document)) {
+      errors[`passengers.${index}.document`] = 'El documento no puede repetirse dentro de la compra.';
+    }
+    if (!birthDate || !/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) {
+      errors[`passengers.${index}.birthDate`] = 'La fecha de nacimiento es obligatoria y debe tener formato YYYY-MM-DD.';
+    }
+
+    const birthDateValue = birthDate ? new Date(`${birthDate}T00:00:00Z`) : null;
+    if (birthDateValue && (Number.isNaN(birthDateValue.getTime()) || birthDateValue.toISOString().slice(0, 10) !== birthDate)) {
+      errors[`passengers.${index}.birthDate`] = 'La fecha de nacimiento debe ser válida.';
+    }
+    if (birthDateValue && birthDateValue > new Date()) {
+      errors[`passengers.${index}.birthDate`] = 'La fecha de nacimiento no puede ser futura.';
+    }
+    const oldestAllowedDate = new Date();
+    oldestAllowedDate.setUTCFullYear(oldestAllowedDate.getUTCFullYear() - 120);
+    if (birthDateValue && birthDateValue < oldestAllowedDate) {
+      errors[`passengers.${index}.birthDate`] = 'La fecha de nacimiento no puede ser anterior a 120 años.';
+    }
+
+    if (document) {
+      seenDocuments.add(document);
+    }
+
+    normalizedPassengers.push({ firstName, lastName, document, birthDate: birthDate || null });
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return res.status(400).json({ message: 'Revise los datos de los pasajeros.', errors });
+  }
+
+  const departure = await Departure.findByPk(departureId);
+  if (!departure || departure.status !== 'SCHEDULED') {
+    return res.status(404).json({ message: 'La salida indicada no existe o no está disponible.' });
+  }
+
+  const flight = await Flight.findByPk(departure.flightId);
+  if (!flight || flight.status !== 'ACTIVE') {
+    return res.status(409).json({ message: 'La salida no está disponible para reserva.' });
+  }
+  if (hasDepartureTimePassed(departure.date, flight.departureTime)) {
+    return res.status(409).json({ message: 'La salida ya pasó y no puede reservarse.' });
+  }
+
+  const validClassCodes = new Set(['ECONOMY', 'FIRST']);
+  if (!validClassCodes.has(classCode)) {
+    return res.status(400).json({ message: 'La clase seleccionada es inválida.', errors: { classCode: 'La clase debe ser ECONOMY o FIRST.' } });
+  }
+
+  const accountPassenger = await Passenger.findOne({ where: { userId: req.user!.id } });
+  if (!accountPassenger) {
+    return res.status(400).json({ message: 'No se encontró el perfil del pasajero titular.' });
+  }
+
+  const outcome = await withDepartureLock(departureId, () => sequelize.transaction(
+    { type: Transaction.TYPES.IMMEDIATE },
+    async (transaction) => {
+      const activeDeparture = await Departure.findByPk(departureId, { transaction });
+      if (!activeDeparture || activeDeparture.status !== 'SCHEDULED') {
+        return { error: 'La salida indicada no existe o no está disponible.' };
+      }
+
+      const activeFlight = await Flight.findByPk(activeDeparture.flightId, { transaction });
+      if (!activeFlight || activeFlight.status !== 'ACTIVE' || hasDepartureTimePassed(activeDeparture.date, activeFlight.departureTime)) {
+        return { error: 'La salida no está disponible para reserva.' };
+      }
+
+      const activeReservations = await Purchase.findAll({
+        where: { passengerId: accountPassenger.id, status: 'RESERVED', expiresAt: { [Op.gt]: new Date() } },
+        attributes: ['id', 'departureId', 'classId', 'quantity'],
+        transaction
+      });
+      const classEntry = await Class.findOne({ where: { code: classCode }, transaction });
+      if (!classEntry) {
+        throw new Error('CLASS_NOT_FOUND');
+      }
+
+      const liveAvailability = await getAvailability(activeFlight, activeDeparture, transaction);
+      const ownReservationQuantity = activeReservations
+        .filter((reservation) => Number(reservation.departureId) === departureId && Number(reservation.classId) === classEntry.id)
+        .reduce((sum, reservation) => sum + Number(reservation.quantity), 0);
+      const liveAvailable = (liveAvailability[classCode as keyof typeof liveAvailability] ?? 0) + ownReservationQuantity;
+      if (quantity > liveAvailable) {
+        return { available: liveAvailable };
+      }
+
+      for (const reservation of activeReservations) {
+        await releaseReservation(reservation.id, 'CANCELADA_POR_USUARIO', transaction);
+      }
+
+      const unitPrice = classCode === 'FIRST' ? Number(activeFlight.firstClassPrice) : Number(activeFlight.economyPrice);
+      const purchase = await Purchase.create({
+        passengerId: accountPassenger.id,
+        status: 'RESERVED',
+        total: unitPrice * quantity,
+        departureId: activeDeparture.id,
+        classId: classEntry.id,
+        quantity,
+        expiresAt: new Date(Date.now() + config.reservationMinutes * 60_000),
+        releaseReason: null,
+        passengerData: JSON.stringify(normalizedPassengers)
+      }, { transaction });
+
+      return { id: purchase.id, status: purchase.status, total: Number(purchase.total), expiresAt: purchase.expiresAt };
+    }
+  ));
+
+  if ('available' in outcome) {
+    return res.status(409).json({
+      message: `Solo hay ${outcome.available} asientos disponibles en esa clase.`,
+      available: outcome.available,
+      errors: { quantity: `Solo hay ${outcome.available} asientos disponibles.` }
+    });
+  }
+  if ('error' in outcome) {
+    return res.status(409).json({ message: outcome.error });
+  }
+  return res.status(201).json(outcome);
+}));
+
+app.get('/api/purchases/:id', requireAuth, requireRole('passenger'), asyncHandler(async (req, res) => {
+  await expireReservations();
+  const purchaseId = Number(req.params.id);
+  const purchase = await Purchase.findByPk(purchaseId);
+  if (!purchase) {
+    return res.status(404).json({ message: 'La compra no existe.' });
+  }
+
+  const accountPassenger = await Passenger.findOne({ where: { userId: req.user!.id } });
+  if (!accountPassenger || purchase.passengerId !== accountPassenger.id) {
+    return res.status(404).json({ message: 'La compra no existe.' });
+  }
+
+  const tickets = purchase.status === 'CONFIRMED'
+    ? await Ticket.findAll({ where: { purchaseId: purchase.id } })
+    : [];
+  const passengerData = typeof purchase.passengerData === 'string' ? JSON.parse(purchase.passengerData) : [];
+  const firstTicket = tickets[0];
+
+  return res.json({
+    id: purchase.id,
+    status: purchase.status,
+    total: Number(purchase.total),
+    expiresAt: purchase.expiresAt,
+    releaseReason: purchase.releaseReason,
+    departureId: firstTicket ? firstTicket.departureId : purchase.departureId ?? null,
+    passengers: passengerData,
+    tickets: tickets.map((ticket) => ({
+      id: ticket.id,
+      departureId: ticket.departureId,
+      classId: ticket.classId,
+      price: Number(ticket.price)
+    }))
+  });
+}));
+
+app.post('/api/purchases/:id/cancel', requireAuth, requireRole('passenger'), asyncHandler(async (req, res) => {
+  const purchaseId = Number(req.params.id);
+  const purchase = await Purchase.findByPk(purchaseId);
+  if (!purchase) {
+    return res.status(404).json({ message: 'La compra no existe.' });
+  }
+
+  const accountPassenger = await Passenger.findOne({ where: { userId: req.user!.id } });
+  if (!accountPassenger || purchase.passengerId !== accountPassenger.id) {
+    return res.status(404).json({ message: 'La compra no existe.' });
+  }
+  if (purchase.status !== 'RESERVED') {
+    return res.status(409).json({ message: 'Solo se pueden cancelar reservas activas.' });
+  }
+
+  await releaseReservation(purchase.id, 'CANCELADA_POR_USUARIO');
+  return res.json({ message: 'La reserva se canceló correctamente.', status: 'EXPIRED' });
+}));
+
 app.post('/api/purchases/quote', requireAuth, requireRole('passenger'), asyncHandler(async (req, res) => {
+  await expireReservations();
+
   const departureId = Number(req.body?.departureId);
   const classCode = String(req.body?.classCode ?? '').toUpperCase();
   const quantity = Number(req.body?.quantity);
@@ -320,7 +603,7 @@ app.post('/api/purchases/quote', requireAuth, requireRole('passenger'), asyncHan
     return res.status(409).json({ message: 'La salida ya pasó y no puede reservarse.' });
   }
 
-  const availability = getAvailability(flight, departure);
+  const availability = await getAvailability(flight, departure);
   const validClassCodes = new Set(['ECONOMY', 'FIRST']);
   if (!validClassCodes.has(classCode)) {
     return res.status(400).json({ message: 'La clase seleccionada es inválida.', errors: { classCode: 'La clase debe ser ECONOMY o FIRST.' } });
@@ -450,10 +733,24 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
   return res.status(500).json({ message: 'Error interno del servidor.' });
 });
 
+let reservationSweepInterval: NodeJS.Timeout | null = null;
+
+export function startReservationSweep() {
+  if (reservationSweepInterval || process.env.VITEST === 'true' || process.env.NODE_ENV === 'test') {
+    return;
+  }
+
+  reservationSweepInterval = setInterval(() => {
+    void expireReservations();
+  }, 30_000);
+  reservationSweepInterval.unref?.();
+}
+
 export async function startServer() {
   if (!config.jwtSecret) {
     throw new Error('JWT_SECRET es obligatorio.');
   }
   await syncDatabase();
+  startReservationSweep();
   app.listen(config.port);
 }

@@ -212,6 +212,27 @@ label input[aria-invalid="true"], label select[aria-invalid="true"] {
   padding: 1rem;
 }
 
+.passenger-card {
+  border: 1px solid #d7dfeb;
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+.passenger-card legend {
+  padding: 0 0.4rem;
+  font-weight: 700;
+}
+
+.countdown {
+  color: #b42318;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.secondary-button {
+  background: #53657d;
+}
+
 .checkbox-grid {
   display: flex;
   flex-wrap: wrap;

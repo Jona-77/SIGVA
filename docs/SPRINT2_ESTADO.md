@@ -1,6 +1,8 @@
 # Estado Sprint #2
 - Tanda A ejecutada y verificada: cobertura Sprint #1 y corrección de US-08.
-- A1: se mantiene la suite backend existente, con un comando único en la raíz: `npm run test`.
-- A2: la UI de edición de vuelos lista cada conflicto de capacidad por salida/fecha y clase.
-- No se tocó la lógica de negocio de las tandas B/C/D ni las referencias del sprint.
-- Validación: `npm run ci` y `npm run db:reset` deben quedar en verde antes del cierre del sprint.
+- Tanda B implementada anteriormente: registro, búsqueda pública y cotización.
+- Tanda C: formulario de pasajeros con titular precargado, errores por campo y vista de reserva con cuenta regresiva/cancelación.
+- Reservas validadas en backend, con control atómico de disponibilidad, expiración, cancelación y una reserva activa por pasajero.
+- Tests C: reservas concurrentes en ambas clases, disponibilidad, vencimiento/liberación, cancelación, compra ajena y rol no pasajero.
+- No se avanzó a la Tanda D.
+- Validación final: `npm run ci` y `npm run db:reset`.
