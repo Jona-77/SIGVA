@@ -1,8 +1,14 @@
 # Estado Sprint #2
-- Tanda A ejecutada y verificada: cobertura Sprint #1 y corrección de US-08.
-- Tanda B implementada anteriormente: registro, búsqueda pública y cotización.
-- Tanda C: formulario de pasajeros con titular precargado, errores por campo y vista de reserva con cuenta regresiva/cancelación.
-- Reservas validadas en backend, con control atómico de disponibilidad, expiración, cancelación y una reserva activa por pasajero.
-- Tests C: reservas concurrentes en ambas clases, disponibilidad, vencimiento/liberación, cancelación, compra ajena y rol no pasajero.
-- No se avanzó a la Tanda D.
-- Validación final: `npm run ci` y `npm run db:reset`.
+- Tanda A completada y verificada: tests Sprint #1 y corrección de conflictos US-08.
+- Tanda B/C implementadas y verificadas previamente: registro, búsqueda, cotización, datos de pasajeros y reservas atómicas.
+- Tanda D implementada: `PaymentGateway` Mercado Pago Checkout Pro y `local-sandbox` para pruebas sin cobro real.
+- API de pago verifica referencia, monto y compra; registra aprobados/rechazados/tardíos y confirma dentro de mutex por salida + SQLite `BEGIN IMMEDIATE`.
+- Aprobación válida actualiza vendidos y emite tickets `SIGVA-XXXXXX`; la confirmación repetida es idempotente.
+- UI permite pagar, usar sandbox local y consultar el resultado verificado al regresar.
+- Configuración, README, modelo ER y checklist actualizados; se documentan pasos humanos y el reembolso manual fuera de plazo.
+- Seed conserva pasajero demo y agrega una ruta con 2 plazas Economy libres.
+- Tests D ejecutados en verde: aprobación, idempotencia, rechazo, vencimiento, compra ajena y flujo completo.
+- CI informado en verde: build backend, 63 tests en 5 suites y build frontend.
+- `npm run db:reset` se ejecutó correctamente; `PRAGMA table_info` confirmó el modelo y los índices únicos de pagos/tickets.
+- Pendiente humano: credenciales/cuentas de prueba Mercado Pago, compra sandbox externa, revisión PR y despliegue; no verificados en esta sesión.
+- Los diagnósticos del editor no reportan errores en archivos modificados.

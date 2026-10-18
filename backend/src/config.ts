@@ -12,6 +12,8 @@ export const config = {
   jwtSecret: jwtSecret ?? '',
   sessionTimeoutMinutes: Number(process.env.SESSION_TIMEOUT_MINUTES ?? 30),
   reservationMinutes: Number(process.env.RESERVATION_MINUTES ?? 10),
+  paymentGateway: process.env.PAYMENT_GATEWAY ?? (process.env.MP_ACCESS_TOKEN ? 'mercadopago' : 'local-sandbox'),
+  mpAccessToken: process.env.MP_ACCESS_TOKEN ?? '',
   clientUrl: process.env.CLIENT_URL ?? 'http://localhost:5173',
   dbPath: path.resolve(repoRoot, dbPathFromEnv)
 };
@@ -21,4 +23,10 @@ if (!Number.isFinite(config.sessionTimeoutMinutes) || config.sessionTimeoutMinut
 }
 if (!Number.isFinite(config.reservationMinutes) || config.reservationMinutes <= 0) {
   throw new Error('RESERVATION_MINUTES debe ser un número mayor que cero.');
+}
+if (!['mercadopago', 'local-sandbox'].includes(config.paymentGateway)) {
+  throw new Error('PAYMENT_GATEWAY debe ser mercadopago o local-sandbox.');
+}
+if (config.paymentGateway === 'mercadopago' && !config.mpAccessToken) {
+  throw new Error('MP_ACCESS_TOKEN es obligatorio para PAYMENT_GATEWAY=mercadopago.');
 }

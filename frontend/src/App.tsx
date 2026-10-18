@@ -565,6 +565,7 @@ function ReservationPage() {
   const [secondsLeft, setSecondsLeft] = useState(() => reservation ? Math.max(0, Math.ceil((Date.parse(reservation.expiresAt) - Date.now()) / 1000)) : 0);
   const [message, setMessage] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const [paying, setPaying] = useState(false);
 
   useEffect(() => {
     if (!reservation) return;
@@ -594,6 +595,18 @@ function ReservationPage() {
     }
   }
 
+  async function startPayment() {
+    setPaying(true);
+    setMessage('');
+    try {
+      const payment = await apiRequest<{ url: string }>(`/api/purchases/${id}/payment`, { method: 'POST' });
+      window.location.assign(payment.url);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo iniciar el pago.');
+      setPaying(false);
+    }
+  }
+
   return (
     <section className="panel">
       <h1>Reserva temporal</h1>
@@ -606,8 +619,115 @@ function ReservationPage() {
         <button type="button" className="danger-button" onClick={() => void cancelReservation()} disabled={cancelling || secondsLeft === 0}>
           {cancelling ? 'Cancelando…' : 'Cancelar reserva'}
         </button>
-        <button type="button" disabled title="Disponible en la Tanda D">Pagar</button>
+        <button type="button" onClick={() => void startPayment()} disabled={paying || secondsLeft === 0}>
+          {paying ? 'Abriendo pago…' : 'Pagar'}
+        </button>
       </div>
+    </section>
+  );
+}
+
+function LocalSandboxPage() {
+  const navigate = useNavigate();
+  const { id } = useParams();
+  const location = useLocation();
+  const reference = new URLSearchParams(location.search).get('reference') ?? '';
+  const [message, setMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  async function finish(status: 'approved' | 'rejected') {
+    setSubmitting(true);
+    setMessage('');
+    try {
+      await apiRequest(`/api/purchases/${id}/payment/sandbox-result`, {
+        method: 'POST',
+        body: JSON.stringify({ reference, status })
+      });
+      navigate(`/pago/resultado/${id}?payment_id=${encodeURIComponent(reference)}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo completar la prueba de pago.');
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <h1>Sandbox local — no es un cobro real</h1>
+      <p>Reserva #{id}</p>
+      <p>Elegí un resultado de prueba para continuar.</p>
+      {message && <div className="error-box" role="alert">{message}</div>}
+      <div className="form-actions">
+        <button type="button" onClick={() => void finish('rejected')} disabled={submitting || !reference}>Rechazar pago</button>
+        <button type="button" onClick={() => void finish('approved')} disabled={submitting || !reference}>Aprobar pago de prueba</button>
+      </div>
+    </section>
+  );
+}
+
+type PurchaseDetail = {
+  id: number;
+  status: string;
+  total: number;
+  flight: { flightNumber: string; origin: string; destination: string; date: string; className: string } | null;
+  passengers: PassengerForm[];
+  tickets: Array<{ id: number; ticketCode: string }>;
+};
+
+function PaymentResultPage() {
+  const { id } = useParams();
+  const location = useLocation();
+  const reference = new URLSearchParams(location.search).get('payment_id')
+    ?? new URLSearchParams(location.search).get('collection_id')
+    ?? '';
+  const [purchase, setPurchase] = useState<PurchaseDetail | null>(null);
+  const [message, setMessage] = useState('Verificando el pago…');
+
+  useEffect(() => {
+    let active = true;
+    async function verify() {
+      if (!reference) {
+        setMessage('No se recibió una referencia de pago para verificar.');
+        return;
+      }
+      try {
+        const result = await apiRequest<{ status: string; message?: string }>(`/api/purchases/${id}/payment/confirm`, {
+          method: 'POST',
+          body: JSON.stringify({ reference })
+        });
+        const detail = await apiRequest<PurchaseDetail>(`/api/purchases/${id}`);
+        if (!active) return;
+        setPurchase(detail);
+        setMessage(result.message ?? (result.status === 'CONFIRMED' ? 'Pago confirmado.' : 'El pago continúa pendiente.'));
+      } catch (error) {
+        if (!active) return;
+        setMessage(error instanceof Error ? error.message : 'No se pudo confirmar el pago.');
+        try {
+          const detail = await apiRequest<PurchaseDetail>(`/api/purchases/${id}`);
+          if (active) setPurchase(detail);
+        } catch {
+          setPurchase(null);
+        }
+      }
+    }
+    void verify();
+    return () => { active = false; };
+  }, [id, reference]);
+
+  return (
+    <section className="panel">
+      <h1>Resultado del pago</h1>
+      {message && <div className={purchase?.status === 'CONFIRMED' ? 'info-box' : 'error-box'} role="status">{message}</div>}
+      {purchase && <>
+        <p>Compra #{purchase.id} · Estado: {purchase.status} · Total: ${purchase.total}</p>
+        {purchase.flight && <p>{purchase.flight.flightNumber} · {purchase.flight.origin} → {purchase.flight.destination} · {purchase.flight.date} · {purchase.flight.className}</p>}
+        {purchase.tickets.length > 0 && <ul>
+          {purchase.tickets.map((ticket, index) => {
+            const passenger = purchase.passengers[index];
+            return <li key={ticket.id}>{ticket.ticketCode} · {passenger ? `${passenger.firstName} ${passenger.lastName}` : 'Pasajero'}</li>;
+          })}
+        </ul>}
+      </>}
+      <Link className="button-link" to="/buscar">Volver a buscar vuelos</Link>
     </section>
   );
 }
@@ -813,6 +933,22 @@ function AppShell() {
             element={
               <ProtectedRoute allowedRole="passenger">
                 <ReservationPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/pago/local-sandbox/:id"
+            element={
+              <ProtectedRoute allowedRole="passenger">
+                <LocalSandboxPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/pago/resultado/:id"
+            element={
+              <ProtectedRoute allowedRole="passenger">
+                <PaymentResultPage />
               </ProtectedRoute>
             }
           />
