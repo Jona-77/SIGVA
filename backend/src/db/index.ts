@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import { randomUUID } from 'node:crypto';
 import { DataTypes, Model, Sequelize, type CreationOptional, type InferAttributes, type InferCreationAttributes } from 'sequelize';
 import { config } from '../config.js';
 
@@ -359,15 +360,28 @@ export class IdModel extends Model<InferAttributes<IdModel>, InferCreationAttrib
   declare flightId?: number;
   declare classId?: number;
   declare price?: number;
+  declare ticketCode?: string;
   declare capacity?: number;
   declare purchaseId?: number;
   declare departureId?: number;
+  declare quantity?: number;
+  declare reference?: string | null;
+  declare payerPassengerId?: number;
   declare status?: string;
   declare amount?: number;
   declare paidAt?: Date | null;
   declare number?: string;
   declare total?: number;
   declare issuedAt?: Date;
+  declare eventKey?: string;
+  declare kind?: string;
+  declare recipient?: string;
+  declare subject?: string;
+  declare text?: string;
+  declare deliveryStatus?: string;
+  declare attempts?: number;
+  declare lastError?: string | null;
+  declare sentAt?: Date | null;
   declare changedAt?: Date;
   declare field?: string;
   declare previousValue?: string | null;
@@ -436,16 +450,22 @@ export const Ticket = sequelize.define<IdModel>('Ticket', {
   purchaseId: { type: DataTypes.INTEGER, allowNull: false, references: { model: Purchase, key: 'id' } },
   departureId: { type: DataTypes.INTEGER, allowNull: false, references: { model: Departure, key: 'id' } },
   classId: { type: DataTypes.INTEGER, allowNull: false, references: { model: Class, key: 'id' } },
-  price: { type: DataTypes.DECIMAL(10, 2), allowNull: false }
+  price: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
+  ticketCode: { type: DataTypes.STRING, allowNull: false, unique: true }
 }, { tableName: 'tickets' });
 
 export const Payment = sequelize.define<IdModel>('Payment', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   purchaseId: { type: DataTypes.INTEGER, allowNull: false, references: { model: Purchase, key: 'id' } },
+  payerPassengerId: { type: DataTypes.INTEGER, allowNull: false, references: { model: Passenger, key: 'id' } },
+  departureId: { type: DataTypes.INTEGER, allowNull: false, references: { model: Departure, key: 'id' } },
+  classId: { type: DataTypes.INTEGER, allowNull: false, references: { model: Class, key: 'id' } },
+  quantity: { type: DataTypes.INTEGER, allowNull: false },
   amount: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
+  reference: { type: DataTypes.STRING, allowNull: true, unique: true },
   status: { type: DataTypes.STRING, allowNull: false, defaultValue: 'PENDING' },
   paidAt: { type: DataTypes.DATE, allowNull: true }
-}, { tableName: 'payments' });
+}, { tableName: 'payments', indexes: [{ unique: true, fields: ['reference'] }] });
 
 export const Invoice = sequelize.define<IdModel>('Invoice', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
@@ -454,6 +474,26 @@ export const Invoice = sequelize.define<IdModel>('Invoice', {
   total: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
   issuedAt: { type: DataTypes.DATE, allowNull: false }
 }, { tableName: 'invoices' });
+
+export const EmailDelivery = sequelize.define<IdModel>('EmailDelivery', {
+  id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+  purchaseId: { type: DataTypes.INTEGER, allowNull: false, references: { model: Purchase, key: 'id' } },
+  eventKey: { type: DataTypes.STRING, allowNull: false },
+  kind: { type: DataTypes.ENUM('DOCUMENTS', 'SCHEDULE_CHANGE', 'CANCELLATION'), allowNull: false },
+  recipient: { type: DataTypes.STRING, allowNull: false },
+  subject: { type: DataTypes.STRING, allowNull: false },
+  text: { type: DataTypes.TEXT, allowNull: false },
+  deliveryStatus: { type: DataTypes.ENUM('PENDING', 'SENT', 'FAILED'), allowNull: false, defaultValue: 'PENDING' },
+  attempts: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+  lastError: { type: DataTypes.TEXT, allowNull: true },
+  sentAt: { type: DataTypes.DATE, allowNull: true }
+}, {
+  tableName: 'email_deliveries',
+  indexes: [
+    { unique: true, fields: ['purchaseId', 'eventKey'] },
+    { fields: ['deliveryStatus'] }
+  ]
+});
 
 export const FlightChangeHistory = sequelize.define<IdModel>('FlightChangeHistory', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
@@ -690,6 +730,28 @@ export async function seedDatabase(options: { seedDemoFlights?: boolean } = {}) 
     { flightId: flight.id, classId: firstClass.id, price: flight.firstClassPrice, capacity: flight.firstClassSeats }
   ]));
 
+  const limitedDate = dateOffset(34);
+  const limitedWeekday = new Date(`${limitedDate}T00:00:00Z`).getUTCDay() || 7;
+  const limitedFlight = await Flight.create({
+    flightNumber: 'AR2999',
+    daysOfWeek: String(limitedWeekday),
+    departureTime: '12:00',
+    arrivalTime: '13:15',
+    originAirportId: airports[0].id,
+    destinationAirportId: airports[2].id,
+    availableFrom: limitedDate,
+    availableTo: limitedDate,
+    economySeats: 2,
+    firstClassSeats: 5,
+    economyPrice: 16900,
+    firstClassPrice: 42500,
+    status: 'ACTIVE'
+  });
+  await Fare.bulkCreate([
+    { flightId: limitedFlight.id, classId: economy.id, price: limitedFlight.economyPrice, capacity: limitedFlight.economySeats },
+    { flightId: limitedFlight.id, classId: firstClass.id, price: limitedFlight.firstClassPrice, capacity: limitedFlight.firstClassSeats }
+  ]);
+
   const departureRows = generatedFlights.flatMap((flight) => seedDepartureDates(
     flight.availableFrom,
     flight.availableTo,
@@ -700,6 +762,7 @@ export async function seedDatabase(options: { seedDemoFlights?: boolean } = {}) 
     status: flight.status === 'CANCELLED' ? 'CANCELLED' : 'SCHEDULED'
   })));
   await Departure.bulkCreate(departureRows);
+  await Departure.create({ flightId: limitedFlight.id, date: limitedDate });
   const soldFlight = generatedFlights[0];
   const multiSaleFlight = generatedFlights[1];
   const soldFutureDates = seedDepartureDates(from, to, soldFlight.daysOfWeek.split(',').map(Number))
@@ -712,25 +775,43 @@ export async function seedDatabase(options: { seedDemoFlights?: boolean } = {}) 
   const soldCount = 5;
   await soldDeparture!.update({ soldEconomy: soldCount });
   const confirmedPurchase = await Purchase.create({
-    passengerId: passenger.id, status: 'CONFIRMED', total: soldCount * Number(soldFlight.economyPrice)
+    passengerId: passenger.id, status: 'CONFIRMED', quantity: soldCount,
+    total: soldCount * Number(soldFlight.economyPrice)
   });
   await Ticket.bulkCreate(Array.from({ length: soldCount }, () => ({
     purchaseId: confirmedPurchase.id,
     departureId: soldDeparture!.id,
     classId: economy.id,
-    price: soldFlight.economyPrice
+    price: soldFlight.economyPrice,
+    ticketCode: `SIGVA-${randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase()}`
   })));
   for (const date of otherFutureDates) {
     const departure = await Departure.findOne({ where: { flightId: multiSaleFlight.id, date } });
     if (departure) {
       await departure.update({ soldEconomy: 1 });
-      const purchase = await Purchase.create({ passengerId: passenger.id, status: 'CONFIRMED', total: multiSaleFlight.economyPrice });
+      const purchase = await Purchase.create({
+        passengerId: passenger.id,
+        status: 'CONFIRMED',
+        quantity: 1,
+        total: multiSaleFlight.economyPrice
+      });
       await Ticket.create({
-        purchaseId: purchase.id, departureId: departure.id, classId: economy.id, price: multiSaleFlight.economyPrice
+        purchaseId: purchase.id, departureId: departure.id, classId: economy.id, price: multiSaleFlight.economyPrice,
+        ticketCode: `SIGVA-${randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase()}`
       });
     }
   }
-  await Payment.create({ purchaseId: confirmedPurchase.id, amount: confirmedPurchase.total, status: 'PAID', paidAt: new Date() });
+  await Payment.create({
+    purchaseId: confirmedPurchase.id,
+    payerPassengerId: passenger.id,
+    departureId: soldDeparture!.id,
+    classId: economy.id,
+    quantity: soldCount,
+    amount: confirmedPurchase.total,
+    reference: `demo-${confirmedPurchase.id}`,
+    status: 'APPROVED',
+    paidAt: new Date()
+  });
   await Invoice.create({
     purchaseId: confirmedPurchase.id, number: 'DEMO-0001', total: confirmedPurchase.total, issuedAt: new Date()
   });

@@ -136,6 +136,26 @@ describe('US-11 búsqueda de vuelos', () => {
     expect(empty.body.message).toContain('No se encontraron');
   });
 
+  it('devuelve la fecha de llegada correcta para vuelos nocturnos y diurnos', async () => {
+    const date = new Date();
+    date.setUTCDate(date.getUTCDate() + 2);
+    const departureDate = date.toISOString().slice(0, 10);
+    const nextDate = new Date(`${departureDate}T00:00:00Z`);
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+    const arrivalDate = nextDate.toISOString().slice(0, 10);
+    const results = await request(app).get('/api/search/flights').query({
+      origin: 'BHI',
+      destination: 'FTE',
+      date: departureDate
+    });
+
+    expect(results.status).toBe(200);
+    expect(results.body.results.find((flight: { flightNumber: string }) => flight.flightNumber === 'AR2009').arrival)
+      .toBe(`${arrivalDate}T01:15:00`);
+    expect(results.body.results.find((flight: { flightNumber: string }) => flight.flightNumber === 'AR2020').arrival)
+      .toBe(`${departureDate}T14:15:00`);
+  });
+
   it('rechaza parámetros inválidos y realiza la validación pública sin sesión', async () => {
     const invalid = await request(app).get('/api/search/flights').query({ origin: 'AEP', destination: 'AEP', date: '2020-01-01' });
     expect(invalid.status).toBe(400);

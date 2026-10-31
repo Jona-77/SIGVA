@@ -1,8 +1,9 @@
 import { Router, type Request, type Response } from 'express';
-import type { Order } from 'sequelize';
-import { Airport, Cancellation, Class, Departure, Fare, Flight, FlightChangeHistory, sequelize, User, type FlightModel } from './db/index.js';
+import { Op, type Order } from 'sequelize';
+import { Airport, Cancellation, Class, Departure, Fare, Flight, FlightChangeHistory, Passenger, Purchase, sequelize, Ticket, User, type DepartureModel, type FlightModel } from './db/index.js';
 import { requireAuth, requireRole } from './auth.js';
 import { asyncHandler } from './asyncHandler.js';
+import { sendPurchaseAlert } from './emailService.js';
 
 const pageSize = 20;
 const weekdays = new Set([1, 2, 3, 4, 5, 6, 7]);
@@ -188,6 +189,38 @@ function parseHistoryValue(value: string | null) {
   }
 }
 
+async function notifyConfirmedPurchases(
+  departures: DepartureModel[],
+  flight: FlightModel,
+  eventKey: string,
+  kind: 'SCHEDULE_CHANGE' | 'CANCELLATION',
+  subject: string,
+  messageForDate: (date: string) => string
+) {
+  const departureById = new Map(departures.map((departure) => [departure.id, departure]));
+  const tickets = await Ticket.findAll({ where: { departureId: { [Op.in]: departures.map((departure) => departure.id) } } });
+  const purchaseIds = [...new Set(tickets.map((ticket) => Number(ticket.purchaseId)))];
+  if (purchaseIds.length === 0) return;
+  const purchases = await Purchase.findAll({ where: { id: { [Op.in]: purchaseIds }, status: 'CONFIRMED' } });
+  const passengers = await Passenger.findAll({ where: { id: { [Op.in]: purchases.map((purchase) => purchase.passengerId) } } });
+  const passengerById = new Map(passengers.map((passenger) => [passenger.id, passenger]));
+  const ticketByPurchase = new Map(tickets.map((ticket) => [Number(ticket.purchaseId), ticket]));
+  for (const purchase of purchases) {
+    const ticket = ticketByPurchase.get(purchase.id);
+    const departure = ticket ? departureById.get(Number(ticket.departureId)) : undefined;
+    const passenger = passengerById.get(purchase.passengerId);
+    if (!departure || !passenger || !passenger.email) continue;
+    await sendPurchaseAlert({
+      purchaseId: purchase.id,
+      eventKey: `${eventKey}-purchase-${purchase.id}`,
+      kind,
+      recipient: passenger.email,
+      subject,
+      text: messageForDate(departure.date)
+    });
+  }
+}
+
 function serializeFlight(flight: FlightModel, history: Array<Record<string, unknown>> = []) {
   const departures = (flight.departures ?? []).map((departure) => ({
     id: departure.id,
@@ -345,8 +378,9 @@ async function updateFlightHandler(req: Request, res: Response) {
   );
   const newSet = new Set(newDates);
   const futureDates = Array.from(newSet).filter((date) => !hasDepartureTimePassed(date, String(values.departureTime)));
+  const changedAt = new Date();
+  const scheduleCancelledDepartures: DepartureModel[] = [];
   await sequelize.transaction(async (transaction) => {
-    const changedAt = new Date();
     for (const field of updatedFields) {
       const previousValue = (previousValues as Record<string, unknown>)[field];
       const newValue = (newValues as Record<string, unknown>)[field];
@@ -395,6 +429,7 @@ async function updateFlightHandler(req: Request, res: Response) {
         departure.cancelledByUserId = req.user!.id;
         await departure.save({ transaction });
         await Cancellation.create({ departureId: departure.id, cancelledAt: changedAt, userId: req.user!.id }, { transaction });
+        scheduleCancelledDepartures.push(departure);
       } else {
         await departure.destroy({ transaction });
       }
@@ -407,6 +442,30 @@ async function updateFlightHandler(req: Request, res: Response) {
       }
     }
   });
+
+  const scheduleChanged = updatedFields.includes('departureTime') || updatedFields.includes('arrivalTime');
+  if (scheduleChanged) {
+    const previousSchedule = `partida ${previousValues.departureTime}, llegada ${previousValues.arrivalTime}`;
+    const newSchedule = `partida ${values.departureTime}, llegada ${values.arrivalTime}`;
+    await notifyConfirmedPurchases(
+      allFutureDepartures,
+      flight,
+      `schedule-${flight.id}-${changedAt.getTime()}`,
+      'SCHEDULE_CHANGE',
+      `Cambio de horario del vuelo ${flight.flightNumber}`,
+      (date) => `El vuelo ${flight.flightNumber} del ${date} cambió de horario. Horario anterior: ${previousSchedule}. Nuevo horario: ${newSchedule}.`
+    );
+  }
+  if (scheduleCancelledDepartures.length > 0) {
+    await notifyConfirmedPurchases(
+      scheduleCancelledDepartures,
+      flight,
+      `schedule-cancellation-${flight.id}-${changedAt.getTime()}`,
+      'CANCELLATION',
+      `Cancelación de salida del vuelo ${flight.flightNumber}`,
+      (date) => `La salida del vuelo ${flight.flightNumber} del ${date} fue cancelada.`
+    );
+  }
 
   const detail = await loadFlightDetail(flight.id);
   return res.json({
@@ -461,6 +520,14 @@ async function cancelFlightHandler(req: Request, res: Response) {
         userId: req.user!.id
       }, { transaction });
     });
+    await notifyConfirmedPurchases(
+      [departure],
+      flight,
+      `departure-cancellation-${flight.id}-${departure.id}-${departure.cancelledAt}`,
+      'CANCELLATION',
+      `Cancelación de salida del vuelo ${flight.flightNumber}`,
+      (date) => `La salida del vuelo ${flight.flightNumber} del ${date} fue cancelada.`
+    );
     return res.json({
       message: 'Salida cancelada correctamente.',
       flight: await loadFlightDetail(flight.id),
@@ -494,6 +561,14 @@ async function cancelFlightHandler(req: Request, res: Response) {
     await flight.save({ transaction });
     await Cancellation.create({ flightId: flight.id, cancelledAt, userId: req.user!.id }, { transaction });
   });
+  await notifyConfirmedPurchases(
+    futureDepartures,
+    flight,
+    `flight-cancellation-${flight.id}-${flight.cancelledAt}`,
+    'CANCELLATION',
+    `Cancelación del vuelo ${flight.flightNumber}`,
+    (date) => `El vuelo ${flight.flightNumber} del ${date} fue cancelado.`
+  );
   return res.json({
     message: 'Vuelo cancelado correctamente.',
     flight: await loadFlightDetail(flight.id),

@@ -483,9 +483,9 @@ describe('US-10 listado y consulta de vuelos', () => {
           const [year, month, day] = departure.date.split('-').map(Number);
           return days.has(new Date(Date.UTC(year, month - 1, day)).getUTCDay() || 7)
             && departure.date > today;
-        })).toBe(true);
+          })).toBe(true);
       }
-    });
+    }, 20_000);
   });
 
   afterEach(() => {

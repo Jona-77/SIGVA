@@ -2,17 +2,29 @@ import cors from 'cors';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { Op, Transaction } from 'sequelize';
+import { Op, QueryTypes, Transaction } from 'sequelize';
 import { randomUUID } from 'node:crypto';
-import { Airport, Class, Departure, Flight, Passenger, Purchase, Role, Session, Ticket, User, ensureExampleFlightDepartures, ensureStateConstraints, sequelize, seedDatabase } from './db/index.js';
+import { Airport, Class, Departure, Flight, FlightChangeHistory, Passenger, Payment, Purchase, Role, Session, Ticket, User, ensureExampleFlightDepartures, ensureStateConstraints, sequelize, seedDatabase } from './db/index.js';
 import { config } from './config.js';
+import { createPaymentGateway, type PaymentGateway } from './paymentGateway.js';
 import { requireAuth, requireRole } from './auth.js';
 import { flightsRouter } from './flights.js';
 import { asyncHandler } from './asyncHandler.js';
+import { createInvoicePdf, createTicketPdf, ensurePurchaseInvoice } from './documents.js';
+import { getPurchaseDocumentEmail, getPurchaseEmailDeliveries, retryPurchaseEmails, sendPurchaseDocuments } from './emailService.js';
 
 export { requireAuth, requireRole } from './auth.js';
 
 export const app = express();
+
+let paymentGateway = createPaymentGateway(config.paymentGateway, {
+  accessToken: config.mpAccessToken,
+  clientUrl: config.clientUrl
+});
+
+export function setPaymentGateway(gateway: PaymentGateway) {
+  paymentGateway = gateway;
+}
 
 app.use(cors({ origin: config.clientUrl, credentials: true }));
 app.use(express.json());
@@ -51,6 +63,10 @@ app.post('/api/auth/login', asyncHandler(async (req, res) => {
   });
 
   if (!user) {
+    return res.status(401).json({ message: 'Las credenciales ingresadas no son válidas.' });
+  }
+
+  if (!user.isActive) {
     return res.status(401).json({ message: 'Las credenciales ingresadas no son válidas.' });
   }
 
@@ -521,6 +537,411 @@ app.post('/api/purchases', requireAuth, requireRole('passenger'), asyncHandler(a
   return res.status(201).json(outcome);
 }));
 
+app.post('/api/purchases/:id/payment', requireAuth, requireRole('passenger'), asyncHandler(async (req, res) => {
+  const purchase = await Purchase.findByPk(Number(req.params.id));
+  const accountPassenger = await Passenger.findOne({ where: { userId: req.user!.id } });
+  if (!purchase || !accountPassenger || purchase.passengerId !== accountPassenger.id) {
+    return res.status(404).json({ message: 'La compra no existe.' });
+  }
+  if (purchase.status !== 'RESERVED' || !purchase.expiresAt || purchase.expiresAt.getTime() <= Date.now()) {
+    if (purchase.status === 'RESERVED') await releaseReservation(purchase.id, 'EXPIRADA');
+    return res.status(409).json({ message: 'La reserva venció o ya no está disponible para pagar.' });
+  }
+
+  const departureId = Number(purchase.departureId ?? 0);
+  const classId = Number(purchase.classId ?? 0);
+  if (!Number.isInteger(departureId) || departureId <= 0 || !Number.isInteger(classId) || classId <= 0) {
+    return res.status(409).json({ message: 'La reserva no contiene una salida o clase válida para pagar.' });
+  }
+
+  const departure = await Departure.findByPk(departureId);
+  const flight = departure ? await Flight.findByPk(departure.flightId) : null;
+  const origin = flight ? await Airport.findByPk(flight.originAirportId) : null;
+  const destination = flight ? await Airport.findByPk(flight.destinationAirportId) : null;
+  const fareClass = await Class.findByPk(classId);
+  const className = fareClass?.name;
+  if (!departure || departure.status !== 'SCHEDULED' || !flight || flight.status !== 'ACTIVE'
+    || hasDepartureTimePassed(departure.date, flight.departureTime) || !className || !origin || !destination) {
+    return res.status(409).json({ message: 'La salida ya no está disponible para pagar.' });
+  }
+
+  let session: { url: string; reference?: string };
+  try {
+    session = await paymentGateway.createPaymentSession({
+      id: purchase.id,
+      total: Number(purchase.total),
+      quantity: Number(purchase.quantity),
+      flightNumber: flight.flightNumber,
+      departureDate: departure.date,
+      origin: origin.iata,
+      destination: destination.iata,
+      className
+    });
+  } catch {
+    await Payment.create({
+      purchaseId: purchase.id,
+      payerPassengerId: accountPassenger.id,
+      departureId,
+      classId,
+      quantity: Number(purchase.quantity),
+      amount: Number(purchase.total),
+      reference: null,
+      status: 'FAILED',
+      paidAt: null
+    });
+    return res.status(502).json({ message: 'No pudimos comunicarnos con la pasarela de pago. Puede reintentarlo mientras la reserva siga vigente.' });
+  }
+  if (session.reference) {
+    await Payment.findOrCreate({
+      where: { reference: session.reference },
+      defaults: {
+        purchaseId: purchase.id,
+        payerPassengerId: accountPassenger.id,
+        departureId,
+        classId,
+        quantity: Number(purchase.quantity),
+        amount: Number(purchase.total),
+        reference: session.reference,
+        status: 'PENDING',
+        paidAt: null
+      }
+    });
+  }
+  return res.json({ url: session.url, gateway: config.paymentGateway, reference: session.reference });
+}));
+
+app.post('/api/purchases/:id/payment/sandbox-result', requireAuth, requireRole('passenger'), asyncHandler(async (req, res) => {
+  const purchase = await Purchase.findByPk(Number(req.params.id));
+  const accountPassenger = await Passenger.findOne({ where: { userId: req.user!.id } });
+  const reference = typeof req.body?.reference === 'string' ? req.body.reference : '';
+  const status = req.body?.status;
+  if (!purchase || !accountPassenger || purchase.passengerId !== accountPassenger.id) {
+    return res.status(404).json({ message: 'La compra no existe.' });
+  }
+  if (purchase.status !== 'RESERVED' || !purchase.expiresAt || purchase.expiresAt.getTime() <= Date.now()) {
+    return res.status(409).json({ message: 'La reserva venció o ya no está disponible para pagar.' });
+  }
+  if (!reference || (status !== 'approved' && status !== 'rejected') || !paymentGateway.setSandboxResult) {
+    return res.status(400).json({ message: 'El resultado solo está disponible en el sandbox local.' });
+  }
+  try {
+    paymentGateway.setSandboxResult(reference, purchase.id, status);
+  } catch {
+    return res.status(400).json({ message: 'La referencia de pago local no es válida para esta compra.' });
+  }
+  return res.json({ reference });
+}));
+
+app.post('/api/purchases/:id/payment/confirm', requireAuth, requireRole('passenger'), asyncHandler(async (req, res) => {
+  const purchaseId = Number(req.params.id);
+  const reference = typeof req.body?.reference === 'string' ? req.body.reference.trim() : '';
+  if (!reference) return res.status(400).json({ message: 'La referencia de pago es obligatoria.' });
+
+  const purchase = await Purchase.findByPk(purchaseId);
+  const accountPassenger = await Passenger.findOne({ where: { userId: req.user!.id } });
+  if (!purchase || !accountPassenger || purchase.passengerId !== accountPassenger.id) {
+    return res.status(404).json({ message: 'La compra no existe.' });
+  }
+
+  const recordedPayment = await Payment.findOne({ where: { reference } });
+  if (recordedPayment) {
+    if (Number(recordedPayment.purchaseId) !== purchase.id) {
+      return res.status(409).json({ message: 'La referencia ya pertenece a otro pago.' });
+    }
+    if (recordedPayment.status === 'APPROVED') {
+      const documentEmail = await sendPurchaseDocuments(purchaseId);
+      return res.json({
+        status: purchase.status,
+        total: Number(purchase.total),
+        tickets: await Ticket.findAll({ where: { purchaseId } }),
+        emailDelivery: documentEmail ? { status: documentEmail.deliveryStatus, attempts: documentEmail.attempts } : null
+      });
+    }
+    if (recordedPayment.status === 'REJECTED') {
+      return res.json({ status: 'REJECTED', message: 'El pago fue rechazado. Puede reintentarlo mientras la reserva siga vigente.' });
+    }
+    if (recordedPayment.status === 'FAILED') {
+      return res.status(502).json({ status: 'FAILED', message: 'No pudimos comunicarnos con la pasarela de pago. Puede iniciar otro intento mientras la reserva siga vigente.' });
+    }
+    if (recordedPayment.status === 'APPROVED_OUT_OF_TIME') {
+      return res.status(409).json({ status: recordedPayment.status, message: 'El pago fue aprobado fuera del plazo. No se emitieron pasajes; el reembolso requiere gestión manual.' });
+    }
+  } else if (purchase.status !== 'RESERVED'
+    && !(purchase.status === 'EXPIRED' && purchase.releaseReason === 'EXPIRADA')) {
+    return res.status(409).json({ message: 'La reserva venció o ya no está disponible para pagar.' });
+  }
+
+  let verified;
+  try {
+    verified = await paymentGateway.verifyPayment(reference);
+  } catch {
+    const failedPayment = recordedPayment ?? await Payment.create({
+      purchaseId: purchase.id,
+      payerPassengerId: accountPassenger.id,
+      departureId: Number(purchase.departureId),
+      classId: Number(purchase.classId),
+      quantity: Number(purchase.quantity),
+      amount: Number(purchase.total),
+      reference,
+      status: 'PENDING',
+      paidAt: null
+    });
+    failedPayment.status = 'FAILED';
+    await failedPayment.save();
+    return res.status(502).json({ status: 'FAILED', message: 'No pudimos comunicarnos con la pasarela de pago. Puede iniciar otro intento mientras la reserva siga vigente.' });
+  }
+  if (verified.externalReference !== String(purchase.id) || verified.reference !== reference
+    || Math.abs(verified.amount - Number(purchase.total)) > 0.01) {
+    return res.status(400).json({ message: 'El pago verificado no coincide con esta compra o su importe.' });
+  }
+
+  const departureId = Number(purchase.departureId);
+  const outcome = await withDepartureLock(departureId, () => sequelize.transaction(
+    { type: Transaction.TYPES.IMMEDIATE },
+    async (transaction) => {
+      const currentPurchase = await Purchase.findByPk(purchaseId, { transaction });
+      if (!currentPurchase) return { kind: 'missing' as const };
+
+      let payment = await Payment.findOne({ where: { reference }, transaction });
+      if (payment && Number(payment.purchaseId) !== currentPurchase.id) return { kind: 'reference-conflict' as const };
+      if (payment && payment.status !== 'PENDING') {
+        return { kind: 'recorded' as const, status: payment.status, purchaseStatus: currentPurchase.status };
+      }
+      if (currentPurchase.status === 'CONFIRMED') return { kind: 'already-confirmed' as const };
+      if (verified.status === 'pending') {
+        const reservationExpired = currentPurchase.status !== 'RESERVED' || !currentPurchase.expiresAt
+          || currentPurchase.expiresAt.getTime() <= Date.now();
+        if (reservationExpired && currentPurchase.status === 'RESERVED') {
+          currentPurchase.status = 'EXPIRED';
+          currentPurchase.releaseReason = 'EXPIRADA';
+          await currentPurchase.save({ transaction });
+        }
+        if (!payment) {
+          payment = await Payment.create({
+            purchaseId: currentPurchase.id,
+            payerPassengerId: accountPassenger.id,
+            departureId,
+            classId: Number(currentPurchase.classId),
+            quantity: Number(currentPurchase.quantity),
+            amount: Number(currentPurchase.total),
+            reference,
+            status: 'PENDING',
+            paidAt: null
+          }, { transaction });
+        }
+        return { kind: reservationExpired ? 'pending-expired' as const : 'pending' as const };
+      }
+
+      const paidAt = verified.paidAt ?? new Date();
+      const persistPayment = async (status: string) => {
+        if (payment) {
+          payment.status = status;
+          payment.paidAt = paidAt;
+          await payment.save({ transaction });
+        } else {
+          await Payment.create({
+            purchaseId: currentPurchase.id,
+            payerPassengerId: accountPassenger.id,
+            departureId,
+            classId: Number(currentPurchase.classId),
+            quantity: Number(currentPurchase.quantity),
+            amount: Number(currentPurchase.total),
+            reference,
+            status,
+            paidAt
+          }, { transaction });
+        }
+      };
+
+      if (verified.status === 'rejected') {
+        await persistPayment('REJECTED');
+        return { kind: 'rejected' as const };
+      }
+
+      if (currentPurchase.status !== 'RESERVED' || !currentPurchase.expiresAt
+        || currentPurchase.expiresAt.getTime() <= Date.now()) {
+        await persistPayment('APPROVED_OUT_OF_TIME');
+        if (currentPurchase.status === 'RESERVED') {
+          currentPurchase.status = 'EXPIRED';
+          currentPurchase.releaseReason = 'EXPIRADA';
+          await currentPurchase.save({ transaction });
+        }
+        return { kind: 'late' as const };
+      }
+
+      const activeDeparture = await Departure.findByPk(departureId, { transaction });
+      const activeFlight = activeDeparture ? await Flight.findByPk(activeDeparture.flightId, { transaction }) : null;
+      const classCode = await Class.findByPk(Number(currentPurchase.classId ?? 0) || -1, { transaction });
+      if (!activeDeparture || activeDeparture.status !== 'SCHEDULED' || !activeFlight || activeFlight.status !== 'ACTIVE'
+        || hasDepartureTimePassed(activeDeparture.date, activeFlight.departureTime) || !classCode) {
+        await persistPayment('APPROVED_OUT_OF_TIME');
+        currentPurchase.status = 'EXPIRED';
+        currentPurchase.releaseReason = 'EXPIRADA';
+        await currentPurchase.save({ transaction });
+        return { kind: 'unavailable' as const };
+      }
+
+      const isEconomy = classCode.code === 'ECONOMY';
+      const capacity = Number(isEconomy ? activeFlight.economySeats : activeFlight.firstClassSeats);
+      const sold = Number(isEconomy ? activeDeparture.soldEconomy : activeDeparture.soldFirstClass);
+      const otherReservations = await Purchase.sum('quantity', {
+        where: {
+          departureId,
+          classId: classCode.id,
+          status: 'RESERVED',
+          expiresAt: { [Op.gt]: new Date() },
+          id: { [Op.ne]: currentPurchase.id }
+        },
+        transaction
+      });
+      const quantity = Number(currentPurchase.quantity);
+      if (sold + Number(otherReservations ?? 0) + quantity > capacity) {
+        await persistPayment('APPROVED_OUT_OF_TIME');
+        currentPurchase.status = 'EXPIRED';
+        currentPurchase.releaseReason = 'EXPIRADA';
+        await currentPurchase.save({ transaction });
+        return { kind: 'unavailable' as const };
+      }
+
+      await persistPayment('APPROVED');
+      if (isEconomy) activeDeparture.soldEconomy += quantity;
+      else activeDeparture.soldFirstClass += quantity;
+      await activeDeparture.save({ transaction });
+      currentPurchase.status = 'CONFIRMED';
+      currentPurchase.releaseReason = null;
+      await currentPurchase.save({ transaction });
+
+      const passengerData = typeof currentPurchase.passengerData === 'string'
+        ? JSON.parse(currentPurchase.passengerData) as Array<{ firstName: string; lastName: string; document: string }>
+        : [];
+      const unitPrice = Number(currentPurchase.total) / quantity;
+      const issuedTickets = await Ticket.bulkCreate(Array.from({ length: quantity }, () => ({
+        purchaseId: currentPurchase.id,
+        departureId,
+        classId: classCode.id,
+        price: unitPrice,
+        ticketCode: `SIGVA-${randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase()}`
+      })), { transaction });
+      const tickets = issuedTickets.map((ticket, index) => ({
+        id: ticket.id,
+        ticketCode: ticket.ticketCode,
+        passenger: passengerData[index] ?? null
+      }));
+      await ensurePurchaseInvoice(currentPurchase.id, transaction);
+      return { kind: 'confirmed' as const, tickets, total: Number(currentPurchase.total) };
+    }
+  ));
+
+  let documentEmail = null;
+  if (outcome.kind === 'confirmed' || outcome.kind === 'already-confirmed'
+    || (outcome.kind === 'recorded' && outcome.status === 'APPROVED')) {
+    documentEmail = await sendPurchaseDocuments(purchaseId);
+  }
+
+  if (outcome.kind === 'missing') return res.status(404).json({ message: 'La compra no existe.' });
+  if (outcome.kind === 'reference-conflict') return res.status(409).json({ message: 'La referencia ya pertenece a otro pago.' });
+  if (outcome.kind === 'pending') return res.status(202).json({ status: 'PENDING', message: 'El pago sigue pendiente.' });
+  if (outcome.kind === 'pending-expired') return res.status(409).json({ status: 'PENDING', message: 'La reserva venció; el pago continúa pendiente y no se emitieron pasajes.' });
+  if (outcome.kind === 'late') return res.status(409).json({ status: 'APPROVED_OUT_OF_TIME', message: 'El pago fue aprobado después del vencimiento. No se emitieron pasajes; el reembolso requiere gestión manual.' });
+  if (outcome.kind === 'unavailable') return res.status(409).json({ status: 'APPROVED_OUT_OF_TIME', message: 'La salida dejó de estar disponible. No se emitieron pasajes; el pago requiere gestión manual.' });
+  if (outcome.kind === 'rejected') return res.json({ status: 'REJECTED', message: 'El pago fue rechazado. Puede reintentarlo mientras la reserva siga vigente.' });
+  if (outcome.kind === 'recorded') {
+    if (outcome.status === 'APPROVED') {
+      const tickets = await Ticket.findAll({ where: { purchaseId } });
+      return res.json({
+        status: outcome.purchaseStatus,
+        total: Number(purchase.total),
+        tickets,
+        emailDelivery: documentEmail ? { status: documentEmail.deliveryStatus, attempts: documentEmail.attempts } : null
+      });
+    }
+    return res.json({ status: outcome.status, message: 'Este resultado de pago ya había sido registrado.' });
+  }
+  if (outcome.kind === 'already-confirmed') return res.status(409).json({ message: 'La compra ya fue confirmada con otra referencia de pago.' });
+  return res.json({
+    status: 'CONFIRMED',
+    total: outcome.total,
+    tickets: outcome.tickets,
+    emailDelivery: documentEmail ? { status: documentEmail.deliveryStatus, attempts: documentEmail.attempts } : null
+  });
+}));
+
+app.post('/api/purchases/:id/email/retry', requireAuth, requireRole('passenger'), asyncHandler(async (req, res) => {
+  const purchase = await Purchase.findByPk(Number(req.params.id));
+  const accountPassenger = await Passenger.findOne({ where: { userId: req.user!.id } });
+  if (!purchase || !accountPassenger || purchase.passengerId !== accountPassenger.id) {
+    return res.status(404).json({ message: 'La compra no existe.' });
+  }
+  const deliveries = await retryPurchaseEmails(purchase.id);
+  return res.json({ deliveries });
+}));
+
+app.get('/api/purchases/:id/tickets/:ticketId.pdf', requireAuth, requireRole('passenger'), asyncHandler(async (req, res) => {
+  const purchase = await Purchase.findByPk(Number(req.params.id));
+  const accountPassenger = await Passenger.findOne({ where: { userId: req.user!.id } });
+  if (!purchase || !accountPassenger || purchase.passengerId !== accountPassenger.id || purchase.status !== 'CONFIRMED') {
+    return res.status(404).json({ message: 'El pasaje no existe.' });
+  }
+  const pdf = await createTicketPdf(purchase.id, Number(req.params.ticketId));
+  if (!pdf) return res.status(404).json({ message: 'El pasaje no existe.' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="pasaje-${req.params.ticketId}.pdf"`);
+  return res.send(pdf);
+}));
+
+app.get('/api/purchases/:id/invoice.pdf', requireAuth, requireRole('passenger'), asyncHandler(async (req, res) => {
+  const purchase = await Purchase.findByPk(Number(req.params.id));
+  const accountPassenger = await Passenger.findOne({ where: { userId: req.user!.id } });
+  if (!purchase || !accountPassenger || purchase.passengerId !== accountPassenger.id || purchase.status !== 'CONFIRMED') {
+    return res.status(404).json({ message: 'La factura no existe.' });
+  }
+  const pdf = await createInvoicePdf(purchase.id);
+  if (!pdf) return res.status(404).json({ message: 'La factura no existe.' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="factura-${purchase.id}.pdf"`);
+  return res.send(pdf);
+}));
+
+app.get('/api/purchases', requireAuth, requireRole('passenger'), asyncHandler(async (req, res) => {
+  await expireReservations();
+  const accountPassenger = await Passenger.findOne({ where: { userId: req.user!.id } });
+  if (!accountPassenger) return res.json({ purchases: [] });
+  const purchases = await Purchase.findAll({ where: { passengerId: accountPassenger.id }, order: [['createdAt', 'DESC'], ['id', 'DESC']] });
+  const result = [];
+  for (const purchase of purchases) {
+    const purchaseCreatedAt = new Date(purchase.get('createdAt') as Date);
+    const ticket = await Ticket.findOne({ where: { purchaseId: purchase.id }, order: [['id', 'ASC']] });
+    const departureId = Number(ticket?.departureId ?? purchase.departureId ?? 0);
+    const departure = departureId ? await Departure.findByPk(departureId) : null;
+    const flight = departure ? await Flight.findByPk(departure.flightId) : null;
+    const origin = flight ? await Airport.findByPk(flight.originAirportId) : null;
+    const destination = flight ? await Airport.findByPk(flight.destinationAirportId) : null;
+    const fareClass = ticket ? await Class.findByPk(Number(ticket.classId))
+      : purchase.classId ? await Class.findByPk(Number(purchase.classId)) : null;
+    let status = purchase.status;
+    if (purchase.status === 'CONFIRMED' && (departure?.status === 'CANCELLED' || flight?.status === 'CANCELLED')) {
+      status = 'CANCELLED';
+    } else if (purchase.status === 'CONFIRMED' && flight && await FlightChangeHistory.findOne({
+      where: { flightId: flight.id, changedAt: { [Op.gte]: purchaseCreatedAt } }
+    })) {
+      status = 'MODIFIED';
+    }
+    result.push({
+      id: purchase.id,
+      purchasedAt: purchaseCreatedAt,
+      flightNumber: flight?.flightNumber ?? '',
+      origin: origin?.iata ?? '',
+      destination: destination?.iata ?? '',
+      departureDate: departure?.date ?? '',
+      className: fareClass?.name ?? '',
+      quantity: Number(purchase.quantity),
+      total: Number(purchase.total),
+      status
+    });
+  }
+  return res.json({ purchases: result });
+}));
+
 app.get('/api/purchases/:id', requireAuth, requireRole('passenger'), asyncHandler(async (req, res) => {
   await expireReservations();
   const purchaseId = Number(req.params.id);
@@ -539,17 +960,49 @@ app.get('/api/purchases/:id', requireAuth, requireRole('passenger'), asyncHandle
     : [];
   const passengerData = typeof purchase.passengerData === 'string' ? JSON.parse(purchase.passengerData) : [];
   const firstTicket = tickets[0];
+  const purchaseDepartureId = firstTicket?.departureId ?? purchase.departureId;
+  const purchaseClassId = firstTicket?.classId ?? purchase.classId;
+  const departure = purchaseDepartureId ? await Departure.findByPk(purchaseDepartureId) : null;
+  const flight = departure ? await Flight.findByPk(departure.flightId) : null;
+  const origin = flight ? await Airport.findByPk(flight.originAirportId) : null;
+  const destination = flight ? await Airport.findByPk(flight.destinationAirportId) : null;
+  const fareClass = purchaseClassId ? await Class.findByPk(purchaseClassId) : null;
+  const emailDelivery = await getPurchaseDocumentEmail(purchase.id);
+  const purchaseCreatedAt = new Date(purchase.get('createdAt') as Date);
+  let tripStatus = purchase.status;
+  if (purchase.status === 'CONFIRMED' && (departure?.status === 'CANCELLED' || flight?.status === 'CANCELLED')) {
+    tripStatus = 'CANCELLED';
+  } else if (purchase.status === 'CONFIRMED' && flight && await FlightChangeHistory.findOne({
+    where: { flightId: flight.id, changedAt: { [Op.gte]: purchaseCreatedAt } }
+  })) {
+    tripStatus = 'MODIFIED';
+  }
 
   return res.json({
     id: purchase.id,
     status: purchase.status,
     total: Number(purchase.total),
     expiresAt: purchase.expiresAt,
+    emailDelivery,
+    emailDeliveries: await getPurchaseEmailDeliveries(purchase.id),
+    tripStatus,
     releaseReason: purchase.releaseReason,
     departureId: firstTicket ? firstTicket.departureId : purchase.departureId ?? null,
+    flight: departure && flight && origin && destination ? {
+      flightNumber: flight.flightNumber,
+      origin: origin.iata,
+      destination: destination.iata,
+      date: departure.date,
+      departureTime: flight.departureTime,
+      arrivalTime: flight.arrivalTime,
+      arrivalNextDay: flight.arrivalTime <= flight.departureTime,
+      className: fareClass?.name ?? '',
+      status: departure.status
+    } : null,
     passengers: passengerData,
     tickets: tickets.map((ticket) => ({
       id: ticket.id,
+      ticketCode: ticket.ticketCode,
       departureId: ticket.departureId,
       classId: ticket.classId,
       price: Number(ticket.price)
@@ -621,6 +1074,154 @@ app.post('/api/purchases/quote', requireAuth, requireRole('passenger'), asyncHan
 app.post('/api/auth/logout', requireAuth, asyncHandler(async (req, res) => {
   await Session.update({ revoked: true }, { where: { id: req.user!.sessionId } });
   res.json({ ok: true, message: 'Sesión cerrada correctamente.' });
+}));
+
+app.get('/api/admin/accounts', requireAuth, requireRole('admin'), asyncHandler(async (_req, res) => {
+  const accounts = await User.findAll({
+    include: [{ model: Role, as: 'role', where: { name: { [Op.in]: ['employee', 'admin'] } } }],
+    order: [['name', 'ASC'], ['id', 'ASC']]
+  });
+  return res.json({ accounts: accounts.map((account) => ({
+    id: account.id,
+    name: account.name,
+    email: account.email,
+    role: account.role?.name,
+    isActive: account.isActive
+  })) });
+}));
+
+app.post('/api/admin/accounts', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  const roleName = req.body?.role;
+  const errors: Record<string, string> = {};
+  if (!name) errors.name = 'El nombre es obligatorio.';
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.email = 'Debe ingresar un email válido.';
+  if (!/^(?=.*[A-Za-z])(?=.*\d).{8,}$/.test(password)) errors.password = 'La contraseña debe tener al menos 8 caracteres, una letra y un número.';
+  if (roleName !== 'employee' && roleName !== 'admin') errors.role = 'Seleccione empleado de mostrador o administrador.';
+  if (Object.keys(errors).length > 0) return res.status(400).json({ message: 'Revise los campos indicados.', errors });
+  if (await User.findOne({ where: { email } })) return res.status(409).json({ message: 'Ya existe una cuenta con ese email.', errors: { email: 'El email ya está registrado.' } });
+
+  const role = await Role.findOne({ where: { name: roleName } });
+  if (!role) return res.status(500).json({ message: 'No se encontró el rol solicitado.' });
+  const account = await User.create({ name, email, passwordHash: await bcrypt.hash(password, 10), roleId: role.id });
+  return res.status(201).json({ account: { id: account.id, name: account.name, email: account.email, role: roleName, isActive: account.isActive } });
+}));
+
+app.put('/api/admin/accounts/:id', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  if (req.body?.name !== undefined && (typeof req.body.name !== 'string' || !req.body.name.trim())) {
+    return res.status(400).json({ message: 'El nombre es obligatorio.', errors: { name: 'El nombre es obligatorio.' } });
+  }
+  if (req.body?.role !== undefined && req.body.role !== 'employee' && req.body.role !== 'admin') {
+    return res.status(400).json({ message: 'Seleccione empleado de mostrador o administrador.', errors: { role: 'Seleccione un rol válido.' } });
+  }
+  const outcome = await sequelize.transaction({ type: Transaction.TYPES.IMMEDIATE }, async (transaction) => {
+    const account = await User.findByPk(Number(req.params.id), {
+      include: [{ model: Role, as: 'role' }], transaction
+    });
+    if (!account || !['admin', 'employee'].includes(account.role?.name ?? '')) return { error: 'missing' as const };
+    const roleName = req.body?.role ?? account.role?.name;
+    const role = await Role.findOne({ where: { name: roleName }, transaction });
+    if (!role) return { error: 'role' as const };
+    if (account.isActive && account.role?.name === 'admin' && roleName !== 'admin') {
+      const activeAdmins = await User.count({
+        where: { isActive: true },
+        include: [{ model: Role, as: 'role', where: { name: 'admin' } }],
+        transaction
+      });
+      if (activeAdmins <= 1) return { error: 'last-admin' as const };
+    }
+    const name = req.body?.name === undefined ? account.name : req.body.name.trim();
+    await account.update({ name, roleId: role.id }, { transaction });
+    return { account: { id: account.id, name, email: account.email, role: roleName, isActive: account.isActive } };
+  });
+  if (outcome.error === 'missing') return res.status(404).json({ message: 'La cuenta no existe.' });
+  if (outcome.error === 'last-admin') return res.status(409).json({ message: 'Debe quedar al menos un administrador activo.' });
+  if (outcome.error === 'role') return res.status(500).json({ message: 'No se encontró el rol solicitado.' });
+  return res.json({ account: outcome.account });
+}));
+
+app.delete('/api/admin/accounts/:id', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const outcome = await sequelize.transaction({ type: Transaction.TYPES.IMMEDIATE }, async (transaction) => {
+    const account = await User.findByPk(Number(req.params.id), {
+      include: [{ model: Role, as: 'role' }], transaction
+    });
+    if (!account || !['admin', 'employee'].includes(account.role?.name ?? '')) return { error: 'missing' as const };
+    if (account.id === req.user!.id) return { error: 'self' as const };
+    if (account.isActive && account.role?.name === 'admin') {
+      const activeAdmins = await User.count({
+        where: { isActive: true },
+        include: [{ model: Role, as: 'role', where: { name: 'admin' } }],
+        transaction
+      });
+      if (activeAdmins <= 1) return { error: 'last-admin' as const };
+    }
+    await account.update({ isActive: false }, { transaction });
+    await Session.update({ revoked: true }, { where: { userId: account.id }, transaction });
+    return { account: { id: account.id, isActive: false } };
+  });
+  if (outcome.error === 'missing') return res.status(404).json({ message: 'La cuenta no existe.' });
+  if (outcome.error === 'self') return res.status(409).json({ message: 'No puede darse de baja a sí mismo.' });
+  if (outcome.error === 'last-admin') return res.status(409).json({ message: 'Debe quedar al menos un administrador activo.' });
+  return res.json({ message: 'La cuenta fue dada de baja.', account: outcome.account });
+}));
+
+app.get('/api/reports/occupancy', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const filters: string[] = [];
+  const replacements: Record<string, string> = {};
+  const flightNumber = typeof req.query.flight === 'string' ? req.query.flight.trim().toUpperCase() : '';
+  const origin = typeof req.query.origin === 'string' ? req.query.origin.trim().toUpperCase() : '';
+  const destination = typeof req.query.destination === 'string' ? req.query.destination.trim().toUpperCase() : '';
+  const from = typeof req.query.from === 'string' ? req.query.from : '';
+  const to = typeof req.query.to === 'string' ? req.query.to : '';
+  if (flightNumber) { filters.push('f.flightNumber = :flightNumber'); replacements.flightNumber = flightNumber; }
+  if (origin) { filters.push('origin.iata = :origin'); replacements.origin = origin; }
+  if (destination) { filters.push('destination.iata = :destination'); replacements.destination = destination; }
+  if (from) { filters.push('d.date >= :from'); replacements.from = from; }
+  if (to) { filters.push('d.date <= :to'); replacements.to = to; }
+
+  type OccupancyRow = {
+    departureId: number;
+    departureDate: string;
+    departureStatus: string;
+    flightNumber: string;
+    origin: string;
+    destination: string;
+    classCode: string;
+    className: string;
+    capacity: number;
+    soldTickets: number;
+  };
+  const rows = await sequelize.query<OccupancyRow>(`
+    SELECT d.id AS departureId, d.date AS departureDate, d.status AS departureStatus,
+      f.flightNumber AS flightNumber, origin.iata AS origin, destination.iata AS destination,
+      classes.code AS classCode, classes.name AS className,
+      CASE WHEN classes.code = 'ECONOMY' THEN f.economySeats ELSE f.firstClassSeats END AS capacity,
+      COUNT(t.id) AS soldTickets
+    FROM departures d
+    JOIN flights f ON f.id = d.flightId
+    JOIN airports origin ON origin.id = f.originAirportId
+    JOIN airports destination ON destination.id = f.destinationAirportId
+    CROSS JOIN classes
+    LEFT JOIN tickets t ON t.departureId = d.id AND t.classId = classes.id
+    ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
+    GROUP BY d.id, classes.id
+    ORDER BY d.date, f.flightNumber, classes.code
+  `, { replacements, type: QueryTypes.SELECT });
+  const report = rows.map((row) => {
+    const capacity = Number(row.capacity);
+    const soldTickets = Number(row.soldTickets);
+    return { ...row, capacity, soldTickets, occupancy: capacity > 0 ? soldTickets / capacity * 100 : 0 };
+  });
+  const totals = report.reduce((total, row) => ({
+    capacity: total.capacity + row.capacity,
+    soldTickets: total.soldTickets + row.soldTickets
+  }), { capacity: 0, soldTickets: 0 });
+  return res.json({
+    rows: report,
+    totals: { ...totals, occupancy: totals.capacity > 0 ? totals.soldTickets / totals.capacity * 100 : 0 }
+  });
 }));
 
 app.get('/api/airports', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {

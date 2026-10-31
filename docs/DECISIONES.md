@@ -6,3 +6,8 @@
 - Los asientos reservados se guardan en la compra (`departureId`, `classId`, `quantity`) y disponibilidad resta solo reservas vigentes (`expiresAt > ahora`); la reserva no crea pasajes (`tickets`).
 - El sweep y la liberación conservan `expiresAt` y cierran con `releaseReason` (`EXPIRADA` o `CANCELADA_POR_USUARIO`).
 - La reserva activa por pasajero se comporta como una sola reserva vigente; al crear otra, se libera la anterior dentro de la transacción.
+- Registro de pasajero: contraseña mínima de 8 caracteres con al menos una letra y un número; el documento se valida como 6-15 caracteres alfanuméricos.
+- Los rechazos liberan asientos con estado de compra `REJECTED` y motivo `PAGO_RECHAZADO`; una aprobación recibida vencida queda en `EXPIRED` / `EXPIRADA` y se registra como `APPROVED_OUT_OF_TIME`, sin pasajes.
+- La confirmación del pago verifica referencia, titular de compra, `external_reference` e importe en la pasarela; luego, el mismo mutex en proceso por salida y la transacción SQLite `BEGIN IMMEDIATE` vuelven a validar salida/capacidad, contabilizan vendidos y emiten tickets. Repetir una referencia no duplica ventas ni pasajes. Varias instancias requerirían bloqueo compartido en una base cliente-servidor.
+- `PaymentGateway` abstrae `mercadopago` y `local-sandbox`. Mercado Pago usa Checkout Pro con `external_reference` y `back_urls`, y verifica siempre contra `GET /v1/payments/{id}`; no se confía en parámetros de retorno ni se almacenan datos de tarjeta. El sandbox local no es un cobro real y sus referencias viven en memoria.
+- Una aprobación posterior al vencimiento se registra como `APPROVED_OUT_OF_TIME`, no emite pasajes y exige reembolso manual; la reversión queda fuera de alcance.
