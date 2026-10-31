@@ -56,6 +56,19 @@ type Reservation = {
   expiresAt: string;
 };
 
+type PurchaseListItem = {
+  id: number;
+  purchasedAt: string;
+  flightNumber: string;
+  origin: string;
+  destination: string;
+  departureDate: string;
+  className: string;
+  quantity: number;
+  total: number;
+  status: string;
+};
+
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
 
 async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -75,6 +88,27 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T
   }
 
   return response.json() as Promise<T>;
+}
+
+async function downloadPdf(path: string, filename: string, setMessage: (message: string) => void) {
+  try {
+    const token = localStorage.getItem('sigva-token');
+    const response = await fetch(`${API_URL}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { message?: string };
+      throw new Error(body.message ?? 'No se pudo descargar el documento.');
+    }
+    const objectUrl = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(objectUrl);
+  } catch (error) {
+    setMessage(error instanceof Error ? error.message : 'No se pudo descargar el documento.');
+  }
 }
 
 function ProtectedRoute({ allowedRole, children }: { allowedRole?: User['role']; children: JSX.Element }) {
@@ -667,10 +701,25 @@ function LocalSandboxPage() {
 type PurchaseDetail = {
   id: number;
   status: string;
+  tripStatus: string;
   total: number;
-  flight: { flightNumber: string; origin: string; destination: string; date: string; className: string } | null;
+  expiresAt: string | null;
+  releaseReason: string | null;
+  emailDelivery: { status: string; attempts: number } | null;
+  emailDeliveries: Array<{ id: number; kind: string; status: string; attempts: number }>;
+  flight: {
+    flightNumber: string;
+    origin: string;
+    destination: string;
+    date: string;
+    departureTime: string;
+    arrivalTime: string;
+    arrivalNextDay: boolean;
+    className: string;
+    status: string;
+  } | null;
   passengers: PassengerForm[];
-  tickets: Array<{ id: number; ticketCode: string }>;
+  tickets: Array<{ id: number; ticketCode: string; price: number }>;
 };
 
 function PaymentResultPage() {
@@ -681,6 +730,8 @@ function PaymentResultPage() {
     ?? '';
   const [purchase, setPurchase] = useState<PurchaseDetail | null>(null);
   const [message, setMessage] = useState('Verificando el pago…');
+  const [retrying, setRetrying] = useState(false);
+  const [retryingEmail, setRetryingEmail] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -713,6 +764,32 @@ function PaymentResultPage() {
     return () => { active = false; };
   }, [id, reference]);
 
+  async function retryPayment() {
+    setRetrying(true);
+    setMessage('');
+    try {
+      const payment = await apiRequest<{ url: string }>(`/api/purchases/${id}/payment`, { method: 'POST' });
+      window.location.assign(payment.url);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo iniciar otro intento de pago.');
+      setRetrying(false);
+    }
+  }
+
+  async function retryEmail() {
+    setRetryingEmail(true);
+    try {
+      await apiRequest(`/api/purchases/${id}/email/retry`, { method: 'POST' });
+      const detail = await apiRequest<PurchaseDetail>(`/api/purchases/${id}`);
+      setPurchase(detail);
+      setMessage('Se reintentó el envío de la documentación.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo reintentar el envío.');
+    } finally {
+      setRetryingEmail(false);
+    }
+  }
+
   return (
     <section className="panel">
       <h1>Resultado del pago</h1>
@@ -726,6 +803,12 @@ function PaymentResultPage() {
             return <li key={ticket.id}>{ticket.ticketCode} · {passenger ? `${passenger.firstName} ${passenger.lastName}` : 'Pasajero'}</li>;
           })}
         </ul>}
+        {purchase.emailDeliveries.some((delivery) => delivery.status === 'FAILED') && <button type="button" className="secondary-button" onClick={() => void retryEmail()} disabled={retryingEmail}>Reintentar envío</button>}
+        {purchase.status === 'RESERVED' && purchase.expiresAt && Date.parse(purchase.expiresAt) > Date.now() && (
+          <button type="button" onClick={() => void retryPayment()} disabled={retrying}>{retrying ? 'Abriendo pago…' : 'Reintentar pago'}</button>
+        )}
+        {purchase.status === 'EXPIRED' && <p>La reserva venció. Debe iniciar una nueva compra.</p>}
+        {purchase.status === 'CONFIRMED' && <Link className="button-link" to={`/mis-compras/${purchase.id}`}>Ver compra y descargar documentos</Link>}
       </>}
       <Link className="button-link" to="/buscar">Volver a buscar vuelos</Link>
     </section>
@@ -838,6 +921,253 @@ function AirportManagement() {
   );
 }
 
+type StaffAccount = { id: number; name: string; email: string; role: 'admin' | 'employee'; isActive: boolean };
+
+function AccountManagement() {
+  const [accounts, setAccounts] = useState<StaffAccount[]>([]);
+  const [form, setForm] = useState<{ id: number | null; name: string; email: string; password: string; role: 'admin' | 'employee' }>({
+    id: null, name: '', email: '', password: '', role: 'employee'
+  });
+  const [message, setMessage] = useState('');
+  const currentUser = JSON.parse(localStorage.getItem('sigva-user') || 'null') as User | null;
+
+  async function loadAccounts() {
+    try {
+      const data = await apiRequest<{ accounts: StaffAccount[] }>('/api/admin/accounts');
+      setAccounts(data.accounts);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudieron cargar las cuentas.');
+    }
+  }
+
+  useEffect(() => { void loadAccounts(); }, []);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setMessage('');
+    try {
+      if (form.id) {
+        await apiRequest(`/api/admin/accounts/${form.id}`, {
+          method: 'PUT', body: JSON.stringify({ name: form.name, role: form.role })
+        });
+      } else {
+        await apiRequest('/api/admin/accounts', {
+          method: 'POST', body: JSON.stringify({ name: form.name, email: form.email, password: form.password, role: form.role })
+        });
+      }
+      setForm({ id: null, name: '', email: '', password: '', role: 'employee' });
+      setMessage('Cuenta guardada.');
+      await loadAccounts();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo guardar la cuenta.');
+    }
+  }
+
+  async function deactivate(accountId: number) {
+    setMessage('');
+    try {
+      await apiRequest(`/api/admin/accounts/${accountId}`, { method: 'DELETE' });
+      setMessage('Cuenta dada de baja.');
+      await loadAccounts();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo dar de baja la cuenta.');
+    }
+  }
+
+  return (
+    <section className="panel">
+      <h1>Gestión de cuentas</h1>
+      <form className="stack" onSubmit={submit}>
+        <div className="row">
+          <label>Nombre<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
+          {!form.id && <label>Email<input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} />
+          </label>}
+          {!form.id && <label>Contraseña inicial<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>}
+          <label>Rol<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as StaffAccount['role'] })}>
+            <option value="employee">Empleado de mostrador</option>
+            <option value="admin">Administrador</option>
+          </select></label>
+        </div>
+        <div className="form-actions">
+          {form.id && <button type="button" className="secondary-button" onClick={() => setForm({ id: null, name: '', email: '', password: '', role: 'employee' })}>Cancelar edición</button>}
+          <button type="submit">{form.id ? 'Guardar cambios' : 'Crear cuenta'}</button>
+        </div>
+      </form>
+      {message && <div className="info-box" role="status">{message}</div>}
+      <div className="table-scroll">
+        <table>
+          <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead>
+          <tbody>{accounts.map((account) => (
+            <tr key={account.id}>
+              <td>{account.name}</td><td>{account.email}</td>
+              <td>{account.role === 'admin' ? 'Administrador' : 'Empleado de mostrador'}</td>
+              <td>{account.isActive ? 'Activa' : 'Inactiva'}</td>
+              <td>
+                <button type="button" onClick={() => setForm({ id: account.id, name: account.name, email: account.email, password: '', role: account.role })}>Modificar</button>
+                <button type="button" className="danger-button" onClick={() => void deactivate(account.id)} disabled={!account.isActive || account.id === currentUser?.id}>Dar de baja</button>
+              </td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function MyPurchasesPage() {
+  const [purchases, setPurchases] = useState<PurchaseListItem[]>([]);
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    void apiRequest<{ purchases: PurchaseListItem[] }>('/api/purchases')
+      .then((data) => setPurchases(data.purchases))
+      .catch((error: unknown) => setMessage(error instanceof Error ? error.message : 'No se pudieron cargar las compras.'));
+  }, []);
+
+  return (
+    <section className="panel">
+      <h1>Mis compras</h1>
+      {message && <div className="error-box" role="alert">{message}</div>}
+      <div className="table-scroll">
+        <table>
+          <thead><tr><th>Fecha</th><th>Vuelo</th><th>Ruta</th><th>Salida</th><th>Clase</th><th>Pasajes</th><th>Monto</th><th>Estado</th><th></th></tr></thead>
+          <tbody>{purchases.map((purchase) => (
+            <tr key={purchase.id}>
+              <td>{new Date(purchase.purchasedAt).toLocaleDateString('es-AR')}</td>
+              <td>{purchase.flightNumber}</td><td>{purchase.origin} → {purchase.destination}</td>
+              <td>{purchase.departureDate}</td><td>{purchase.className}</td>
+              <td>{purchase.quantity}</td><td>${purchase.total.toFixed(2)}</td><td>{purchase.status}</td>
+              <td><Link to={`/mis-compras/${purchase.id}`}>Detalle</Link></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      {purchases.length === 0 && !message && <p>No hay compras registradas.</p>}
+    </section>
+  );
+}
+
+function PurchaseDetailsPage() {
+  const { id } = useParams();
+  const [purchase, setPurchase] = useState<PurchaseDetail | null>(null);
+  const [message, setMessage] = useState('');
+  const [retrying, setRetrying] = useState(false);
+
+  async function loadPurchase() {
+    const data = await apiRequest<PurchaseDetail>(`/api/purchases/${id}`);
+    setPurchase(data);
+  }
+
+  useEffect(() => {
+    void loadPurchase().catch((error: unknown) => setMessage(error instanceof Error ? error.message : 'No se pudo cargar la compra.'));
+  }, [id]);
+
+  async function retryEmails() {
+    setRetrying(true);
+    setMessage('');
+    try {
+      await apiRequest(`/api/purchases/${id}/email/retry`, { method: 'POST' });
+      await loadPurchase();
+      setMessage('Se reintentó el envío de los correos pendientes.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo reintentar el envío.');
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  if (!purchase) return <section className="panel">{message || 'Cargando compra…'}</section>;
+  return (
+    <section className="panel">
+      <div className="section-heading"><h1>Compra #{purchase.id}</h1><Link to="/mis-compras">Volver al historial</Link></div>
+      <p>Estado de compra: {purchase.status} · Estado del viaje: {purchase.tripStatus} · Total: ${purchase.total.toFixed(2)}</p>
+      {purchase.flight && <p>{purchase.flight.flightNumber} · {purchase.flight.origin} → {purchase.flight.destination} · {purchase.flight.date} · {purchase.flight.departureTime} - {purchase.flight.arrivalTime}{purchase.flight.arrivalNextDay ? ' +1' : ''} · {purchase.flight.className}</p>}
+      {purchase.status === 'CONFIRMED' && <>
+        <button type="button" onClick={() => void downloadPdf(`/api/purchases/${purchase.id}/invoice.pdf`, `factura-${purchase.id}.pdf`, setMessage)}>Descargar factura</button>
+        <ul>{purchase.tickets.map((ticket, index) => {
+          const passenger = purchase.passengers[index];
+          return <li key={ticket.id}>
+            {ticket.ticketCode}{passenger ? ` · ${passenger.firstName} ${passenger.lastName}` : ''}{' '}
+            <button type="button" onClick={() => void downloadPdf(`/api/purchases/${purchase.id}/tickets/${ticket.id}.pdf`, `pasaje-${ticket.ticketCode}.pdf`, setMessage)}>Descargar pasaje</button>
+          </li>;
+        })}</ul>
+      </>}
+      {purchase.emailDelivery && <p>Envío de pasajes y factura: {purchase.emailDelivery.status}</p>}
+      {purchase.emailDeliveries.map((delivery) => <p key={delivery.id}>{delivery.kind === 'DOCUMENTS' ? 'Documentación' : delivery.kind === 'CANCELLATION' ? 'Cancelación' : 'Cambio de horario'}: {delivery.status}</p>)}
+      {purchase.emailDeliveries.some((delivery) => delivery.status === 'FAILED') && <button type="button" className="secondary-button" onClick={() => void retryEmails()} disabled={retrying}>Reintentar envío</button>}
+      {message && <div className="info-box" role="status">{message}</div>}
+    </section>
+  );
+}
+
+type OccupancyRow = {
+  departureId: number;
+  departureDate: string;
+  departureStatus: string;
+  flightNumber: string;
+  origin: string;
+  destination: string;
+  classCode: string;
+  className: string;
+  capacity: number;
+  soldTickets: number;
+  occupancy: number;
+};
+
+function OccupancyReportPage() {
+  const [filters, setFilters] = useState({ flight: '', origin: '', destination: '', from: '', to: '' });
+  const [rows, setRows] = useState<OccupancyRow[]>([]);
+  const [totals, setTotals] = useState({ capacity: 0, soldTickets: 0, occupancy: 0 });
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function loadReport(event?: React.FormEvent) {
+    event?.preventDefault();
+    setLoading(true);
+    setMessage('');
+    const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
+    try {
+      const data = await apiRequest<{ rows: OccupancyRow[]; totals: typeof totals }>(`/api/reports/occupancy?${params}`);
+      setRows(data.rows);
+      setTotals(data.totals);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo cargar el reporte.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { void loadReport(); }, []);
+
+  return (
+    <section className="panel">
+      <h1>Reporte de ocupación</h1>
+      <form className="flight-filters" onSubmit={loadReport}>
+        <label>Vuelo<input value={filters.flight} onChange={(event) => setFilters({ ...filters, flight: event.target.value })} /></label>
+        <label>Origen<input value={filters.origin} onChange={(event) => setFilters({ ...filters, origin: event.target.value.toUpperCase() })} /></label>
+        <label>Destino<input value={filters.destination} onChange={(event) => setFilters({ ...filters, destination: event.target.value.toUpperCase() })} /></label>
+        <label>Desde<input type="date" value={filters.from} onChange={(event) => setFilters({ ...filters, from: event.target.value })} /></label>
+        <label>Hasta<input type="date" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} /></label>
+        <button type="submit" disabled={loading}>{loading ? 'Consultando…' : 'Consultar'}</button>
+      </form>
+      {message && <div className="error-box" role="alert">{message}</div>}
+      <p>Totales del período: {totals.soldTickets} pasajes vendidos / {totals.capacity} asientos · Ocupación {totals.occupancy.toFixed(1)}%</p>
+      <div className="table-scroll">
+        <table>
+          <thead><tr><th>Salida</th><th>Vuelo</th><th>Ruta</th><th>Clase</th><th>Capacidad</th><th>Vendidos</th><th>Ocupación</th><th>Estado</th></tr></thead>
+          <tbody>{rows.map((row) => (
+            <tr key={`${row.departureId}-${row.classCode}`}>
+              <td>{row.departureDate}</td><td>{row.flightNumber}</td><td>{row.origin} → {row.destination}</td>
+              <td>{row.className}</td><td>{row.capacity}</td><td>{row.soldTickets}</td><td>{row.occupancy.toFixed(1)}%</td>
+              <td>{row.departureStatus === 'CANCELLED' ? 'Cancelada' : 'Programada'}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function RoleHome({ user }: { user: User }) {
   if (user.role === 'admin') {
     return <AirportManagement />;
@@ -903,9 +1233,14 @@ function AppShell() {
               <>
                 <Link to="/flights">Vuelos</Link>
                 <Link to="/airports">Aeropuertos</Link>
+                <Link to="/admin/accounts">Cuentas</Link>
+                <Link to="/reports/occupancy">Ocupación</Link>
               </>
             )}
-            {user.role === 'passenger' && <Link to="/buscar">Buscar vuelos</Link>}
+            {user.role === 'passenger' && <>
+              <Link to="/buscar">Buscar vuelos</Link>
+              <Link to="/mis-compras">Mis compras</Link>
+            </>}
             <button type="button" className="logout" onClick={handleLogout}>Cerrar sesión</button>
           </>
         ) : (
@@ -953,6 +1288,22 @@ function AppShell() {
             }
           />
           <Route path="/forbidden" element={<ForbiddenPage />} />
+          <Route
+            path="/admin/accounts"
+            element={<ProtectedRoute allowedRole="admin"><AccountManagement /></ProtectedRoute>}
+          />
+          <Route
+            path="/reports/occupancy"
+            element={<ProtectedRoute allowedRole="admin"><OccupancyReportPage /></ProtectedRoute>}
+          />
+          <Route
+            path="/mis-compras"
+            element={<ProtectedRoute allowedRole="passenger"><MyPurchasesPage /></ProtectedRoute>}
+          />
+          <Route
+            path="/mis-compras/:id"
+            element={<ProtectedRoute allowedRole="passenger"><PurchaseDetailsPage /></ProtectedRoute>}
+          />
           <Route
             path="/"
             element={

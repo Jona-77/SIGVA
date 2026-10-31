@@ -143,25 +143,26 @@ describe('US-17 pago y registro de transacciones', () => {
     expect((await Departure.findByPk(departure.id))?.soldEconomy).toBe(2);
   });
 
-  it('registra un rechazo, libera la reserva y conserva el motivo', async () => {
+  it('registra un rechazo y permite reintentar dentro del plazo de reserva', async () => {
     const token = await registerAndLogin(2);
     const { departure } = await nextDeparture();
     const created = await createReservation(token, departure.id, 'BB');
+    const originalExpiry = Date.parse(created.body.expiresAt);
     const reference = await startPayment(token, created.body.id);
     await chooseLocalResult(token, created.body.id, reference, 'rejected');
 
     const rejected = await confirmPayment(token, created.body.id, reference);
     const purchase = await Purchase.findByPk(created.body.id);
     expect(rejected.body.status).toBe('REJECTED');
-    expect(purchase?.status).toBe('REJECTED');
-    expect(purchase?.releaseReason).toBe('PAGO_RECHAZADO');
+    expect(purchase?.status).toBe('RESERVED');
+    expect(purchase?.releaseReason).toBeNull();
+    expect(purchase?.expiresAt?.getTime()).toBe(originalExpiry);
     expect((await Payment.findOne({ where: { reference } }))?.status).toBe('REJECTED');
-    const quote = await request(app).post('/api/purchases/quote').set('Authorization', `Bearer ${token}`).send({
-      departureId: departure.id,
-      classCode: 'ECONOMY',
-      quantity: 2
-    });
-    expect(quote.status).toBe(200);
+    const retryReference = await startPayment(token, created.body.id);
+    await chooseLocalResult(token, created.body.id, retryReference, 'approved');
+    const retried = await confirmPayment(token, created.body.id, retryReference);
+    expect(retried.body.status).toBe('CONFIRMED');
+    expect(await Ticket.count({ where: { purchaseId: created.body.id } })).toBe(2);
   });
 
   it('registra una aprobación tardía sin vender asientos ni emitir pasajes', async () => {

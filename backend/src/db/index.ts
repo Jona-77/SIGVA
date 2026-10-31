@@ -373,6 +373,15 @@ export class IdModel extends Model<InferAttributes<IdModel>, InferCreationAttrib
   declare number?: string;
   declare total?: number;
   declare issuedAt?: Date;
+  declare eventKey?: string;
+  declare kind?: string;
+  declare recipient?: string;
+  declare subject?: string;
+  declare text?: string;
+  declare deliveryStatus?: string;
+  declare attempts?: number;
+  declare lastError?: string | null;
+  declare sentAt?: Date | null;
   declare changedAt?: Date;
   declare field?: string;
   declare previousValue?: string | null;
@@ -465,6 +474,26 @@ export const Invoice = sequelize.define<IdModel>('Invoice', {
   total: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
   issuedAt: { type: DataTypes.DATE, allowNull: false }
 }, { tableName: 'invoices' });
+
+export const EmailDelivery = sequelize.define<IdModel>('EmailDelivery', {
+  id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+  purchaseId: { type: DataTypes.INTEGER, allowNull: false, references: { model: Purchase, key: 'id' } },
+  eventKey: { type: DataTypes.STRING, allowNull: false },
+  kind: { type: DataTypes.ENUM('DOCUMENTS', 'SCHEDULE_CHANGE', 'CANCELLATION'), allowNull: false },
+  recipient: { type: DataTypes.STRING, allowNull: false },
+  subject: { type: DataTypes.STRING, allowNull: false },
+  text: { type: DataTypes.TEXT, allowNull: false },
+  deliveryStatus: { type: DataTypes.ENUM('PENDING', 'SENT', 'FAILED'), allowNull: false, defaultValue: 'PENDING' },
+  attempts: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+  lastError: { type: DataTypes.TEXT, allowNull: true },
+  sentAt: { type: DataTypes.DATE, allowNull: true }
+}, {
+  tableName: 'email_deliveries',
+  indexes: [
+    { unique: true, fields: ['purchaseId', 'eventKey'] },
+    { fields: ['deliveryStatus'] }
+  ]
+});
 
 export const FlightChangeHistory = sequelize.define<IdModel>('FlightChangeHistory', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },

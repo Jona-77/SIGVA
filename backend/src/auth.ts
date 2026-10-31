@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from './config.js';
-import { Session } from './db/index.js';
+import { Role, Session, User } from './db/index.js';
 
 type AuthUser = {
   id: number;
@@ -57,16 +57,17 @@ async function authenticate(token: string, req: Request, res: Response, next: Ne
 
   try {
     const session = await Session.findByPk(decoded.sessionId);
+    const user = await User.findByPk(decoded.userId, { include: [{ model: Role, as: 'role' }] });
     const now = new Date();
-    if (!session || session.get('revoked') || now.getTime() - new Date(session.get('lastActivity') as Date).getTime()
+    if (!session || !user?.isActive || session.get('revoked') || now.getTime() - new Date(session.get('lastActivity') as Date).getTime()
       > config.sessionTimeoutMinutes * 60_000) {
       return res.status(401).json({ message: 'Sesión no válida o expirada.' });
     }
     await session.update({ lastActivity: now });
     req.user = {
-      id: decoded.userId,
-      email: decoded.email,
-      role: decoded.role,
+      id: user.id,
+      email: user.email,
+      role: user.role?.name ?? decoded.role,
       sessionId: decoded.sessionId
     };
     return next();
