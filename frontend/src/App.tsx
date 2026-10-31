@@ -327,7 +327,7 @@ function SearchFlightsPage() {
             <div key={result.id} className="panel">
               <h3>{result.flightNumber}</h3>
               <p>{result.origin} → {result.destination} · {result.departure.slice(0, 10)} · {result.duration}</p>
-              <p>Salida: {result.departure.slice(11, 16)} · Llegada: {result.arrival.slice(11, 16)}</p>
+              <p>Salida: {result.departure.slice(11, 16)} · Llegada: {result.arrival.slice(11, 16)}{result.arrival.slice(0, 10) > result.departure.slice(0, 10) ? ' +1' : ''}</p>
               <ul>
                 {result.classes.map((cls) => (
                   <li key={cls.code}>{cls.name}: ${cls.price} {cls.soldOut ? 'Agotada' : `(${cls.available} libres)`}</li>
