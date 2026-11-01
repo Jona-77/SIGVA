@@ -111,6 +111,39 @@ async function downloadPdf(path: string, filename: string, setMessage: (message:
   }
 }
 
+function purchaseStatusLabel(status: string) {
+  switch (status) {
+    case 'CONFIRMED': return 'Confirmada';
+    case 'RESERVED': return 'Reservada';
+    case 'EXPIRED': return 'Vencida';
+    case 'CANCELLED': return 'Cancelada';
+    case 'MODIFIED': return 'Modificada';
+    case 'REJECTED': return 'Rechazada';
+    default: return status;
+  }
+}
+
+function tripStatusLabel(status: string) {
+  switch (status) {
+    case 'CONFIRMED': return 'Confirmado';
+    case 'RESERVED': return 'Reservado';
+    case 'EXPIRED': return 'Vencido';
+    case 'CANCELLED': return 'Cancelado';
+    case 'MODIFIED': return 'Modificado';
+    case 'REJECTED': return 'Rechazado';
+    default: return status;
+  }
+}
+
+function emailDeliveryStatusLabel(status: string) {
+  switch (status) {
+    case 'SENT': return 'Enviado';
+    case 'FAILED': return 'Fallido';
+    case 'PENDING': return 'Pendiente';
+    default: return status;
+  }
+}
+
 function ProtectedRoute({ allowedRole, children }: { allowedRole?: User['role']; children: JSX.Element }) {
   const token = localStorage.getItem('sigva-token');
   const user = JSON.parse(localStorage.getItem('sigva-user') || 'null') as User | null;
@@ -795,7 +828,7 @@ function PaymentResultPage() {
       <h1>Resultado del pago</h1>
       {message && <div className={purchase?.status === 'CONFIRMED' ? 'info-box' : 'error-box'} role="status">{message}</div>}
       {purchase && <>
-        <p>Compra #{purchase.id} · Estado: {purchase.status} · Total: ${purchase.total}</p>
+        <p>Compra #{purchase.id} · Estado: {purchaseStatusLabel(purchase.status)} · Total: ${purchase.total}</p>
         {purchase.flight && <p>{purchase.flight.flightNumber} · {purchase.flight.origin} → {purchase.flight.destination} · {purchase.flight.date} · {purchase.flight.className}</p>}
         {purchase.tickets.length > 0 && <ul>
           {purchase.tickets.map((ticket, index) => {
@@ -1036,7 +1069,7 @@ function MyPurchasesPage() {
               <td>{new Date(purchase.purchasedAt).toLocaleDateString('es-AR')}</td>
               <td>{purchase.flightNumber}</td><td>{purchase.origin} → {purchase.destination}</td>
               <td>{purchase.departureDate}</td><td>{purchase.className}</td>
-              <td>{purchase.quantity}</td><td>${purchase.total.toFixed(2)}</td><td>{purchase.status}</td>
+              <td>{purchase.quantity}</td><td>${purchase.total.toFixed(2)}</td><td>{purchaseStatusLabel(purchase.status)}</td>
               <td><Link to={`/mis-compras/${purchase.id}`}>Detalle</Link></td>
             </tr>
           ))}</tbody>
@@ -1080,7 +1113,7 @@ function PurchaseDetailsPage() {
   return (
     <section className="panel">
       <div className="section-heading"><h1>Compra #{purchase.id}</h1><Link to="/mis-compras">Volver al historial</Link></div>
-      <p>Estado de compra: {purchase.status} · Estado del viaje: {purchase.tripStatus} · Total: ${purchase.total.toFixed(2)}</p>
+      <p>Estado de compra: {purchaseStatusLabel(purchase.status)} · Estado del viaje: {tripStatusLabel(purchase.tripStatus)} · Total: ${purchase.total.toFixed(2)}</p>
       {purchase.flight && <p>{purchase.flight.flightNumber} · {purchase.flight.origin} → {purchase.flight.destination} · {purchase.flight.date} · {purchase.flight.departureTime} - {purchase.flight.arrivalTime}{purchase.flight.arrivalNextDay ? ' +1' : ''} · {purchase.flight.className}</p>}
       {purchase.status === 'CONFIRMED' && <>
         <button type="button" onClick={() => void downloadPdf(`/api/purchases/${purchase.id}/invoice.pdf`, `factura-${purchase.id}.pdf`, setMessage)}>Descargar factura</button>
@@ -1092,8 +1125,8 @@ function PurchaseDetailsPage() {
           </li>;
         })}</ul>
       </>}
-      {purchase.emailDelivery && <p>Envío de pasajes y factura: {purchase.emailDelivery.status}</p>}
-      {purchase.emailDeliveries.map((delivery) => <p key={delivery.id}>{delivery.kind === 'DOCUMENTS' ? 'Documentación' : delivery.kind === 'CANCELLATION' ? 'Cancelación' : 'Cambio de horario'}: {delivery.status}</p>)}
+      {purchase.emailDelivery && <p>Envío de pasajes y factura: {emailDeliveryStatusLabel(purchase.emailDelivery.status)}</p>}
+      {purchase.emailDeliveries.map((delivery) => <p key={delivery.id}>{delivery.kind === 'DOCUMENTS' ? 'Documentación' : delivery.kind === 'CANCELLATION' ? 'Cancelación' : 'Cambio de horario'}: {emailDeliveryStatusLabel(delivery.status)}</p>)}
       {purchase.emailDeliveries.some((delivery) => delivery.status === 'FAILED') && <button type="button" className="secondary-button" onClick={() => void retryEmails()} disabled={retrying}>Reintentar envío</button>}
       {message && <div className="info-box" role="status">{message}</div>}
     </section>
