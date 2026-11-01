@@ -1114,22 +1114,34 @@ type OccupancyRow = {
   occupancy: number;
 };
 
+const OCCUPANCY_PAGE_SIZE = 50;
+
 function OccupancyReportPage() {
   const [filters, setFilters] = useState({ flight: '', origin: '', destination: '', from: '', to: '' });
   const [rows, setRows] = useState<OccupancyRow[]>([]);
   const [totals, setTotals] = useState({ capacity: 0, soldTickets: 0, occupancy: 0 });
+  const [page, setPage] = useState(1);
+  const [totalRows, setTotalRows] = useState(0);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
-  async function loadReport(event?: React.FormEvent) {
+  async function loadReport(event?: React.FormEvent, requestedPage = page) {
     event?.preventDefault();
     setLoading(true);
     setMessage('');
     const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
+    params.set('page', String(requestedPage));
+    params.set('pageSize', String(OCCUPANCY_PAGE_SIZE));
     try {
-      const data = await apiRequest<{ rows: OccupancyRow[]; totals: typeof totals }>(`/api/reports/occupancy?${params}`);
+      const data = await apiRequest<{
+        rows: OccupancyRow[];
+        totals: typeof totals;
+        pagination: { page: number; pageSize: number; totalRows: number };
+      }>(`/api/reports/occupancy?${params}`);
       setRows(data.rows);
       setTotals(data.totals);
+      setPage(data.pagination.page);
+      setTotalRows(data.pagination.totalRows);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'No se pudo cargar el reporte.');
     } finally {
@@ -1142,7 +1154,7 @@ function OccupancyReportPage() {
   return (
     <section className="panel">
       <h1>Reporte de ocupación</h1>
-      <form className="flight-filters" onSubmit={loadReport}>
+      <form className="flight-filters" onSubmit={(event) => void loadReport(event, 1)}>
         <label>Vuelo<input value={filters.flight} onChange={(event) => setFilters({ ...filters, flight: event.target.value })} /></label>
         <label>Origen<input value={filters.origin} onChange={(event) => setFilters({ ...filters, origin: event.target.value.toUpperCase() })} /></label>
         <label>Destino<input value={filters.destination} onChange={(event) => setFilters({ ...filters, destination: event.target.value.toUpperCase() })} /></label>
@@ -1152,6 +1164,7 @@ function OccupancyReportPage() {
       </form>
       {message && <div className="error-box" role="alert">{message}</div>}
       <p>Totales del período: {totals.soldTickets} pasajes vendidos / {totals.capacity} asientos · Ocupación {totals.occupancy.toFixed(1)}%</p>
+      {totalRows === 0 && <p>No se encontraron salidas para los filtros seleccionados.</p>}
       <div className="table-scroll">
         <table>
           <thead><tr><th>Salida</th><th>Vuelo</th><th>Ruta</th><th>Clase</th><th>Capacidad</th><th>Vendidos</th><th>Ocupación</th><th>Estado</th></tr></thead>
@@ -1164,6 +1177,14 @@ function OccupancyReportPage() {
           ))}</tbody>
         </table>
       </div>
+      {totalRows > 0 && <div className="pagination">
+        <span>Mostrando {(page - 1) * OCCUPANCY_PAGE_SIZE + 1}–{Math.min(page * OCCUPANCY_PAGE_SIZE, totalRows)} de {totalRows}</span>
+        <div className="pagination-controls">
+          <button type="button" className="secondary-button" onClick={() => void loadReport(undefined, page - 1)} disabled={loading || page <= 1}>Anterior</button>
+          <span>Página {page} de {Math.ceil(totalRows / OCCUPANCY_PAGE_SIZE)}</span>
+          <button type="button" className="secondary-button" onClick={() => void loadReport(undefined, page + 1)} disabled={loading || page >= Math.ceil(totalRows / OCCUPANCY_PAGE_SIZE)}>Siguiente</button>
+        </div>
+      </div>}
     </section>
   );
 }
