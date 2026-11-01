@@ -961,8 +961,19 @@ function AccountManagement() {
   const [form, setForm] = useState<{ id: number | null; name: string; email: string; password: string; role: 'admin' | 'employee' }>({
     id: null, name: '', email: '', password: '', role: 'employee'
   });
+  const [errors, setErrors] = useState<FieldErrors>({});
   const [message, setMessage] = useState('');
   const currentUser = JSON.parse(localStorage.getItem('sigva-user') || 'null') as User | null;
+
+  function updateField(field: 'name' | 'email' | 'password' | 'role', value: string) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setErrors((current) => {
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+    setMessage('');
+  }
 
   async function loadAccounts() {
     try {
@@ -977,6 +988,7 @@ function AccountManagement() {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    setErrors({});
     setMessage('');
     try {
       if (form.id) {
@@ -989,9 +1001,11 @@ function AccountManagement() {
         });
       }
       setForm({ id: null, name: '', email: '', password: '', role: 'employee' });
+      setErrors({});
       setMessage('Cuenta guardada.');
       await loadAccounts();
     } catch (error) {
+      if (error instanceof ApiError) setErrors(error.fields);
       setMessage(error instanceof Error ? error.message : 'No se pudo guardar la cuenta.');
     }
   }
@@ -1012,21 +1026,21 @@ function AccountManagement() {
       <h1>Gestión de cuentas</h1>
       <form className="stack" onSubmit={submit}>
         <div className="row">
-          <label>Nombre<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
-          {!form.id && <label>Email<input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} />
+          <label>Nombre<input value={form.name} onChange={(event) => updateField('name', event.target.value)} aria-invalid={Boolean(errors.name)} />{errors.name && <span className="field-error" role="alert">{errors.name}</span>}</label>
+          {!form.id && <label>Email<input type="email" value={form.email} onChange={(event) => updateField('email', event.target.value)} aria-invalid={Boolean(errors.email)} />{errors.email && <span className="field-error" role="alert">{errors.email}</span>}
           </label>}
-          {!form.id && <label>Contraseña inicial<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>}
-          <label>Rol<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as StaffAccount['role'] })}>
+          {!form.id && <label>Contraseña inicial<input type="password" value={form.password} onChange={(event) => updateField('password', event.target.value)} aria-invalid={Boolean(errors.password)} />{errors.password && <span className="field-error" role="alert">{errors.password}</span>}</label>}
+          <label>Rol<select value={form.role} onChange={(event) => updateField('role', event.target.value as StaffAccount['role'])} aria-invalid={Boolean(errors.role)}>
             <option value="employee">Empleado de mostrador</option>
             <option value="admin">Administrador</option>
-          </select></label>
+          </select>{errors.role && <span className="field-error" role="alert">{errors.role}</span>}</label>
         </div>
         <div className="form-actions">
-          {form.id && <button type="button" className="secondary-button" onClick={() => setForm({ id: null, name: '', email: '', password: '', role: 'employee' })}>Cancelar edición</button>}
+          {form.id && <button type="button" className="secondary-button" onClick={() => { setForm({ id: null, name: '', email: '', password: '', role: 'employee' }); setErrors({}); setMessage(''); }}>Cancelar edición</button>}
           <button type="submit">{form.id ? 'Guardar cambios' : 'Crear cuenta'}</button>
         </div>
       </form>
-      {message && <div className="info-box" role="status">{message}</div>}
+      {message && <div className={Object.keys(errors).length ? 'error-box' : 'info-box'} role={Object.keys(errors).length ? 'alert' : 'status'}>{message}</div>}
       <div className="table-scroll">
         <table>
           <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead>
