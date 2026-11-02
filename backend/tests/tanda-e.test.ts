@@ -234,10 +234,19 @@ describe('Sprint 3', () => {
     expect(report.status).toBe(200);
     expect(Date.now() - startedAt).toBeLessThan(3000);
     expect(report.body.rows).toHaveLength(2);
+    expect(report.body.pagination).toEqual({ page: 1, pageSize: 50, totalRows: 2 });
     const economy = report.body.rows.find((row: { classCode: string }) => row.classCode === 'ECONOMY');
     expect(economy.departureStatus).toBe('CANCELLED');
     expect(economy.soldTickets).toBeGreaterThan(0);
     expect(report.body.totals.capacity).toBeGreaterThan(0);
+    const secondPage = await request(app).get('/api/reports/occupancy').set('Authorization', `Bearer ${adminToken}`).query({
+      flight: flight!.flightNumber, origin: origin!.iata, destination: destination!.iata, from: departure.date, to: departure.date,
+      page: 2, pageSize: 1
+    });
+    expect(secondPage.status).toBe(200);
+    expect(secondPage.body.rows).toHaveLength(1);
+    expect(secondPage.body.pagination).toEqual({ page: 2, pageSize: 1, totalRows: 2 });
+    expect(secondPage.body.totals).toEqual(report.body.totals);
     expect((await request(app).get('/api/reports/occupancy').set('Authorization', `Bearer ${passenger.token}`)).status).toBe(403);
   });
 });

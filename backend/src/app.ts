@@ -1175,6 +1175,11 @@ app.get('/api/reports/occupancy', requireAuth, requireRole('admin'), asyncHandle
   const destination = typeof req.query.destination === 'string' ? req.query.destination.trim().toUpperCase() : '';
   const from = typeof req.query.from === 'string' ? req.query.from : '';
   const to = typeof req.query.to === 'string' ? req.query.to : '';
+  const requestedPage = Number.parseInt(typeof req.query.page === 'string' ? req.query.page : '', 10);
+  const requestedPageSize = Number.parseInt(typeof req.query.pageSize === 'string' ? req.query.pageSize : '', 10);
+  const page = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? Math.min(requestedPage, 1_000_000) : 1;
+  const pageSize = Number.isSafeInteger(requestedPageSize) && requestedPageSize > 0 ? Math.min(requestedPageSize, 100) : 50;
+  const offset = (page - 1) * pageSize;
   if (flightNumber) { filters.push('f.flightNumber = :flightNumber'); replacements.flightNumber = flightNumber; }
   if (origin) { filters.push('origin.iata = :origin'); replacements.origin = origin; }
   if (destination) { filters.push('destination.iata = :destination'); replacements.destination = destination; }
@@ -1192,35 +1197,48 @@ app.get('/api/reports/occupancy', requireAuth, requireRole('admin'), asyncHandle
     className: string;
     capacity: number;
     soldTickets: number;
+    totalRows: number;
+    totalCapacity: number;
+    totalSoldTickets: number;
   };
   const rows = await sequelize.query<OccupancyRow>(`
-    SELECT d.id AS departureId, d.date AS departureDate, d.status AS departureStatus,
-      f.flightNumber AS flightNumber, origin.iata AS origin, destination.iata AS destination,
-      classes.code AS classCode, classes.name AS className,
-      CASE WHEN classes.code = 'ECONOMY' THEN f.economySeats ELSE f.firstClassSeats END AS capacity,
-      COUNT(t.id) AS soldTickets
-    FROM departures d
-    JOIN flights f ON f.id = d.flightId
-    JOIN airports origin ON origin.id = f.originAirportId
-    JOIN airports destination ON destination.id = f.destinationAirportId
-    CROSS JOIN classes
-    LEFT JOIN tickets t ON t.departureId = d.id AND t.classId = classes.id
-    ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
-    GROUP BY d.id, classes.id
-    ORDER BY d.date, f.flightNumber, classes.code
-  `, { replacements, type: QueryTypes.SELECT });
+    WITH report_rows AS (
+      SELECT d.id AS departureId, d.date AS departureDate, d.status AS departureStatus,
+        f.flightNumber AS flightNumber, origin.iata AS origin, destination.iata AS destination,
+        classes.code AS classCode, classes.name AS className,
+        CASE WHEN classes.code = 'ECONOMY' THEN f.economySeats ELSE f.firstClassSeats END AS capacity,
+        COUNT(t.id) AS soldTickets
+      FROM departures d
+      JOIN flights f ON f.id = d.flightId
+      JOIN airports origin ON origin.id = f.originAirportId
+      JOIN airports destination ON destination.id = f.destinationAirportId
+      CROSS JOIN classes
+      LEFT JOIN tickets t ON t.departureId = d.id AND t.classId = classes.id
+      ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
+      GROUP BY d.id, classes.id
+    ), report_with_totals AS (
+      SELECT report_rows.*, COUNT(*) OVER() AS totalRows,
+        SUM(capacity) OVER() AS totalCapacity, SUM(soldTickets) OVER() AS totalSoldTickets
+      FROM report_rows
+    )
+    SELECT * FROM report_with_totals
+    ORDER BY departureDate, flightNumber, classCode
+    LIMIT :pageSize OFFSET :offset
+  `, { replacements: { ...replacements, pageSize, offset }, type: QueryTypes.SELECT });
   const report = rows.map((row) => {
     const capacity = Number(row.capacity);
     const soldTickets = Number(row.soldTickets);
     return { ...row, capacity, soldTickets, occupancy: capacity > 0 ? soldTickets / capacity * 100 : 0 };
   });
-  const totals = report.reduce((total, row) => ({
-    capacity: total.capacity + row.capacity,
-    soldTickets: total.soldTickets + row.soldTickets
-  }), { capacity: 0, soldTickets: 0 });
+  const totalRows = Number(rows[0]?.totalRows ?? 0);
+  const totals = {
+    capacity: Number(rows[0]?.totalCapacity ?? 0),
+    soldTickets: Number(rows[0]?.totalSoldTickets ?? 0)
+  };
   return res.json({
     rows: report,
-    totals: { ...totals, occupancy: totals.capacity > 0 ? totals.soldTickets / totals.capacity * 100 : 0 }
+    totals: { ...totals, occupancy: totals.capacity > 0 ? totals.soldTickets / totals.capacity * 100 : 0 },
+    pagination: { page, pageSize, totalRows }
   });
 }));
 
